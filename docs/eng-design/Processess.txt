@@ -1,0 +1,209 @@
+You're absolutely right. The v3.4 spec references the **RAG Orchestrator** using abstracted LLM providers (OpenAI/Anthropic via LangChain/LlamaIndex), token budgeting, and vendor lock-in mitigation. Here is the **new complete list** with **Section 16: AI & LLM API Integration** added, plus the previously identified missing processes integrated:
+
+---
+
+## 1. Document Ingestion & Processing
+
+1. **Upload Validation** — File validation, virus scanning (ClamAV), quarantine routing
+2. **Document Lifecycle Management** — Workflow orchestration, state transitions, archival
+3. **OCR Extraction** — Text extraction, layout analysis, handwriting recognition
+4. **Preview Generation** — Thumbnail and preview rendering
+5. **Virus Signature Freshness Check** — Daily validation that ClamAV signatures are <24h old
+6. **Disk Space Monitoring** — Pre-upload validation ensuring >20% disk space available
+
+---
+
+## 2. Data Enrichment & Analysis
+
+7. **PII Detection** — Entity recognition (GDPR/HIPAA/PCI), confidence scoring
+8. **Tagging & Classification** — NER, document classification, metadata extraction
+9. **Embedding Generation** — Text vectorization, batch inference
+10. **Entity Relationship Mapping** — Graph construction, lineage tracking
+11. **Model Drift Detection** — Monthly F1 deviation monitoring for PII/Classification models
+12. **Embedding Drift Monitoring** — Cosine distance tracking <0.1 threshold
+
+---
+
+## 3. Human-in-the-Loop (HITL) Governance Gates
+
+13. **Gate 1: Ingestion Review** — Quarantine, biometrics for release (SOC, 1-4h)
+14. **Gate 2: OCR Quality Review** — Side-by-side comparison, manual correction (Data Entry, 8h)
+15. **Gate 3: PII Verification** — Redaction confirmation, legal hold application (DPO, 4h)
+16. **Gate 4: Classification Review** — Tag editing, hierarchy browser (Taxonomist, 24h)
+17. **Gate 5: Compliance Approval** — Hold application, retention enforcement (Legal, 24-48h)
+18. **Gate 6: Search Validation** — Source verification, RAG regeneration (AI/ML Engineering, 8h triggered)
+19. **Gate 7: Final Export Approval** — Biometric sign-off, chain-of-custody (Data Owner + Compliance, 4h)
+20. **Risk-Based Auto-Approval** — Risk score <0.3 bypasses Gates 2-4 (configurable per tenant)
+21. **SLA Breach Escalation** — Automated escalation at 50% SLA consumption, PagerDuty at 90%
+22. **Reviewer Load Balancing** — Round-robin assignment with skill-based routing (language, document type)
+23. **Temporal Signal Handling** — Workflow pause via `await workflow.wait_for_external_signal()`
+
+---
+
+## 4. Search & Retrieval
+
+24. **Adaptive Query Routing** — Route queries to Meilisearch/Qdrant/Memgraph with 200ms timeout guards
+25. **Cross-Encoder Re-Ranking** — BGE-Reranker result ranking
+26. **Graceful Degradation** — Fallback to available sources when databases fail
+27. **RAG Pipeline Execution** — Retrieval-Augmented Generation, token budgeting, context optimization
+28. **Context Window Optimization** — Token budgeting, relevance scoring, truncation strategies
+29. **Cache Hit Optimization** — Redis caching with >60% hit ratio target
+
+---
+
+## 5. Data Consistency & Eventing
+
+30. **Transactional Outbox Writing** — Atomic persistence of business data + events
+31. **Outbox Event Relay** — Poll and publish to downstream systems
+32. **Idempotent Consumption** — Exactly-once processing via UUID v5 content hashes
+33. **Dead Letter Queue Handling** — Failed event routing after 5 attempts
+34. **Cascading Deletion (GDPR Art. 17)** — Propagate deletions to all stores within 60s
+35. **Meilisearch Index Sync** — Lexical index updates from Outbox, <30s freshness lag
+36. **Qdrant Vector Sync** — HNSW index updates, versioned vector consistency
+37. **Memgraph Event Replay** — Graph relationship ingestion from entity extraction
+38. **Event Replay Capability** — Safe reprocessing via event sourcing with versioned snapshots
+39. **Retry Logic Execution** — Exponential backoff with jitter (base 2, max 60s)
+
+---
+
+## 6. Identity, Security & Access
+
+40. **Authentication Flows** — OIDC, SAML 2.0, WebAuthn/Passkeys
+41. **Authorization Decisions** — RBAC, fine-grained permission checks
+42. **mTLS Certificate Issuance** — Service identity, automatic rotation
+43. **Secret Rotation** — Dynamic credentials, 24h TTL enforcement
+44. **SPIFFE/SPIRE Attestation** — Workload identity verification
+45. **Quarterly Access Reviews** — ORY Keto permission audit, orphaned permission detection
+46. **Breach Detection** — ORY Kratos credential compromise monitoring
+47. **JWT Binding Validation** — Short-lived access tokens (<1h) bound to mTLS client certificates
+48. **Network Segmentation Enforcement** — Private VLAN firewall rule management (10.0.0.0/8)
+
+---
+
+## 7. Workflow Orchestration (Temporal)
+
+49. **Document Processing Workflow** — End-to-end document pipeline
+50. **HITL Gate Workflows** — Pause/resume for human signals
+51. **High-Priority Workflows** — SLA-critical compliance, exports
+52. **GPU Task Execution** — OCR, embedding generation, model inference
+53. **Worker Versioning Deployment** — `GetVersion()` API for safe code updates, circuit breaker management
+54. **Queue Partitioning Management** — Route to `high_priority` / `gpu_tasks` / `hitl_waiting` / `standard_default`
+
+---
+
+## 8. Operations & Monitoring
+
+55. **SLO Monitoring & Alerting** — Error budget calculation, burn rate alerts
+56. **Log Aggregation** — Full-text log search, 90-day retention
+57. **Distributed Tracing** — OpenTelemetry request correlation
+58. **Incident Response** — PagerDuty escalation, runbook execution
+59. **Chaos Engineering** — Random container termination, partition simulation
+60. **Vulnerability Scanning** — Trivy container scans, Snyk dependency checks
+61. **RTO/RPO Verification Testing** — Monthly automated restore tests, quarterly chaos drills
+62. **SLO Budget Burn Tracking** — 2% budget burn in 1h alert, 10% in 12h alert
+
+---
+
+## 9. Webhook & Notification
+
+63. **Async Notification Delivery** — Exponential retry, delivery confirmation
+64. **Dead Letter Recovery** — Manual intervention for failed webhooks
+
+---
+
+## 10. FileManager Operations
+
+65. **File Registry Management** — Metadata tracking, lifecycle state management
+66. **Versioning Control** — Document version history, rollback capability
+67. **Orphaned File Detection** — Consistency checks between PostgreSQL and MinIO
+68. **ACL Synchronization** — Access control list enforcement across stores
+
+---
+
+## 11. RLHF & Model Improvement
+
+69. **RLHF Pipeline Execution** — Reinforcement Learning from Human Feedback data collection, model fine-tuning trigger, A/B testing framework integration
+
+---
+
+## 12. Infrastructure & Data Management
+
+70. **Horizontal Scaling (Container A)** — Replica adjustment 2-6 based on CPU/latency
+71. **Vertical Scaling (Container C)** — RAM upgrade for search databases
+72. **GPU Worker Scaling** — Queue-depth based provisioning
+73. **PostgreSQL PITR** — Point-in-Time Recovery execution
+74. **MinIO Cross-Region Replication** — Object storage geo-redundancy
+75. **Backup Orchestration** — Automated backup, restore testing
+76. **Search Index Regeneration** — Recovery from Outbox (2-4h for 1M documents)
+77. **Configuration GitOps Sync** — ArgoCD/Flux automated configuration synchronization
+
+---
+
+## 13. Deferred/Roadmap Processes (Phase 2-3)
+
+78. **Change Detection Engine** — Document diffing, version comparison, lineage tracking (Month 2)
+79. **Tenant Portal Provisioning** — Self-service admin, analytics, usage reporting (Month 2)
+80. **Advanced AI Agent Workflows** — Autonomous multi-step task execution (Month 3)
+81. **Multimodal Processing** — Vision, audio transcription, video analysis (Month 4)
+82. **Predictive Auto-scaling** — Load forecasting, cache pre-warming, GPU pre-allocation (Month 4)
+83. **Blockchain Anchoring** — Document hash notarization, proof of existence (Month 6)
+84. **Federated Learning** — Cross-tenant model improvement, privacy-preserving (Month 6)
+
+---
+
+## 14. Platform Resilience & Runtime Guarantees
+
+85. **Health & Readiness Probe Handling** — Container liveness checks, graceful startup sequencing
+86. **Rate Limiting & Tenant Throttling** — API request quotas, burst handling, backpressure propagation
+87. **Cache Invalidation & Warming** — Redis TTL management, embedding cache refresh, predictive pre-fetch
+88. **API Versioning & Deprecation Workflow** — Contract evolution, backward-compatible routing, sunset enforcement
+89. **Tenant Data Isolation Enforcement** — Query scoping middleware, row-level security policies
+90. **Model Registry & Deployment Coordination** — Embedding/model version tracking, A/B inference routing
+91. **Audit Log Immutable Shipping** — Real-time forwarding to WORM storage, GDPR legal hold tagging
+92. **Resource Quota Monitoring & Alerting** — Per-tenant document/count/token budget tracking
+93. **Zero-Downtime Schema Migration** — PostgreSQL/pgvector and Temporal schema change coordination
+94. **Runtime Secrets Injection & Validation** — Docker Compose secret mounting, SPIFFE attestation
+95. **ModSecurity WAF Processing** — Request inspection with OWASP Core Rule Set, anomaly scoring
+96. **GeoIP Blocking Enforcement** — Configurable per-tenant geo-blocking for GDPR/data sovereignty
+97. **DDoS Protection & Bot Detection** — Traffic scrubbing and automated threat response
+
+---
+
+## 15. Billing & Monetization
+
+98. **Usage Metering Collection** — Aggregate per-tenant metrics with 5-min granularity
+99. **Tier Enforcement & Rate Limiting** — Apply plan-based quotas (Free/Pro/Enterprise)
+100. **Real-Time Cost Calculation** — Compute running spend per tenant using unit pricing
+101. **Invoice Generation & Delivery** — Monthly/weekly cycle compilation, PDF generation, tax support
+102. **Payment Processing Integration** — Stripe/Paddle webhook handling, dunning management
+103. **Credit & Balance Management** — Prepaid credit application, promotional code redemption
+104. **Usage Alerting & Threshold Notifications** — Notify at 50%/80%/100% of quota
+105. **Billing Event Publication** — Emit immutable billing events to Outbox for accounting
+106. **Subscription Lifecycle Management** — Upgrades/downgrades with proration, trial conversion
+107. **Revenue Recognition & Compliance** — ASC 606 / IFRS 15 alignment, deferred revenue tracking
+108. **Cost Allocation & Internal Chargeback** — Attribute infrastructure costs to tenants
+109. **Billing Dispute & Adjustment Workflow** — Ticketed review process for usage disputes
+110. **Tax Jurisdiction Detection & Calculation** — Auto-detect tenant location, apply tax rules
+
+---
+
+## 16. AI & LLM API Integration *(New Section)*
+
+111. **LLM Provider Abstraction** — Unified routing via LiteLLM or equivalent abstraction layer (OpenAI, Anthropic, Azure OpenAI, local LLaMA)
+112. **Multi-Provider Fallback** — Automatic failover to secondary LLM provider on primary outage/latency breach
+113. **LLM API Key Lifecycle Management** — Vault integration for dynamic API key rotation, <1h TTL for LLM credentials
+114. **Token Budget Enforcement** — Per-request and per-tenant token limits, context window truncation strategies
+115. **Prompt Template Versioning** — A/B testing of prompt engineering, version control for RAG prompts
+116. **LLM Response Caching** — Semantic caching of common queries to reduce API costs and latency
+117. **LLM Latency Monitoring** — P95 <3s tracking, automatic fallback on timeout
+118. **Context Relevance Scoring** — Validation that retrieved context matches query intent before LLM injection
+119. **Local Model Fallback** — LLaMA/local model activation during cloud provider outages or for air-gapped deployments
+120. **LLM Cost Allocation** — Per-tenant token usage tracking, model pricing tier attribution (GPT-4 vs GPT-3.5 vs Claude)
+121. **Prompt Injection Detection** — Input sanitization, adversarial prompt filtering before LLM API call
+122. **Output Moderation & Filtering** — Post-generation content filtering, PII redaction in LLM responses
+123. **Embedding Model A/B Testing** — Comparative evaluation of embedding models (all-MiniLM vs OpenAI Ada) for retrieval quality
+124. **RAG Context Assembly** — Dynamic context window assembly from Meilisearch/Qdrant/Memgraph results with relevance weighting
+
+---
+
+**Total: 124 Processes**

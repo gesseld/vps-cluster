@@ -1,0 +1,84 @@
+# Environment files (keep .env.example as template)
+.env
+.env.local
+.env.*.local
+
+# Secrets and credentials
+*.key
+*.pem
+*.crt
+*.secret
+secrets/
+credentials/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+terraform.tfstate.backup
+.terraform.lock.hcl
+
+# SSH keys
+id_rsa
+id_dsa
+*.pub
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Binary files (except hcloud which we need)
+*.exe
+*.dll
+*.so
+*.dylib
+!hcloud  # Keep hcloud binary
+
+# Logs
+*.log
+logs/
+
+# Backup files
+*.bak
+*.backup
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+ENV/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Hetzner specific
+hetzner-cli-key  # SSH private key
+
+# k3s/k8s
+.kube/
+.k3s/
+.kubeconfig
+
+# S3/backup temporary files
+*.backup
+*.snapshot
