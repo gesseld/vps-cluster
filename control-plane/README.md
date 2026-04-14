@@ -1,42 +1,28 @@
-# Control Plane
+# Phase 3: Control Plane
+
+**Deployment Sequence:** After Phase 2 (Data Plane), before Phase 4 (Observability Plane)
 
 ## Purpose
-The **brain** of the platform: workflow orchestration, policy enforcement, identity management, and GitOps. Does not process documents; manages the metadata and state transitions that govern processing.
+The **governance layer**: policy enforcement, identity management, and GitOps. Manages security, compliance, and deployment orchestration across all planes.
 
 ## Components
+1. **Kyverno**: Policy engine with rate limiting and security policies
+2. **SPIRE**: Identity foundation with PostgreSQL backend and fallback mode
+3. **ArgoCD**: GitOps controller with drift detection and API protection
+4. **Control NATS**: Stateless signaling for critical control messages
 
-### 1. Temporal (Workflow Orchestration)
-- Version: 1.30.4
-- HA: 2 replicas active-active
-- Priority: foundation-critical
-- Dependencies: PostgreSQL in Data Plane
+## Deployment Order
+1. Kyverno (policy engine)
+2. SPIRE Server (identity management)
+3. ArgoCD (GitOps)
+4. Control NATS (stateless messaging)
 
-### 2. Kyverno (Policy Engine)
-- Policy enforcement and admission control
-- Rate limiting for API protection
-- Security baseline policies
+## Validation
+```bash
+./scripts/validate-phase-gates.sh 3
+```
 
-### 3. SPIRE (Identity Foundation)
-- Workload identity with mTLS
-- PostgreSQL backend for persistence
-- Fallback mode for operational resilience
-
-### 4. ArgoCD (GitOps Controller)
-- Declarative deployment with drift detection
-- Protected API with rate limits
-- ApplicationSets for multi-plane management
-
-### 5. NATS (Control Signaling)
-- Stateless instance for critical control signals
-- TLS with Cert-Manager certificates
-- Bridge to Data Plane NATS if needed
-
-## Deployment Sequence
-1. **After** Data Plane (PostgreSQL dependency)
-2. **After** Shared Foundations (PKI, RBAC, Network Policies)
-3. **After** Phase 0: Budget Scaffolding
-
-## Resource Budget
-- Requests: 2.8Gi memory, 1.8 CPU
-- Limits: 4.2Gi memory, 3.2 CPU
-- Priority: foundation-critical for Temporal
+## Important Notes
+- **SPIRE Dependency**: Requires PostgreSQL from Data Plane for backend storage
+- **Policy Enforcement**: Kyverno policies enforce labels, resource limits, and security baselines
+- **GitOps**: ArgoCD manages all subsequent deployments via Git

@@ -1,42 +1,30 @@
-# Observability Plane
+# Phase 4: Observability Plane
+
+**Deployment Sequence:** After Phase 3 (Control Plane), last phase
 
 ## Purpose
-The **eyes and ears**: telemetry collection, storage, visualization, and alerting. Lightweight but comprehensive coverage across all planes.
+The **sensory system**: unified telemetry collection (logs + metrics), long-term storage, and alerting. Uses VictoriaMetrics (not Prometheus) for 60% resource savings and Fluent Bit (not Promtail+OTel) for unified log shipping.
 
 ## Components
+1. **VictoriaMetrics**: High-performance TSDB with cardinality control and backup
+2. **vmagent**: Efficient metrics collection with relabeling and egress control
+3. **Fluent Bit**: Unified log pipeline with noise reduction and audit enrichment
+4. **Loki**: Log aggregation with S3 backend and tiered retention
+5. **Alerting**: Burn-rate alerting with intelligent routing and inhibition
 
-### 1. VictoriaMetrics (Time Series Database)
-- Single instance mode (VMSingle)
-- Cardinality controls
-- 2s end-to-end latency target
-- Long-term retention: 30 days
+## Deployment Order
+1. VictoriaMetrics (metrics storage)
+2. vmagent (metrics collection)
+3. Fluent Bit (log collection)
+4. Loki (log storage)
+5. Alerting + Grafana (visualization)
 
-### 2. Fluent Bit (Logs + Metrics Shipping)
-- Unified agent for logs and metrics
-- Lower resource footprint than Promtail+OTel
-- Output to Loki and VictoriaMetrics
+## Validation
+```bash
+./scripts/validate-phase-gates.sh 4
+```
 
-### 3. Loki (Log Storage)
-- Index-only mode for efficiency
-- 7-day retention
-- Compatible with Grafana
-
-### 4. Grafana (Visualization)
-- Pre-configured dashboards for all planes
-- Single sign-on integration
-- Alert visualization
-
-### 5. Alertmanager (Alert Routing)
-- Differentiated routing: Critical → PagerDuty, Warning → Slack
-- Deduplication and grouping
-- Silence management
-
-## Deployment Sequence
-1. **After** Control Plane (to avoid self-monitoring bootstrap)
-2. **After** Data Plane (metrics storage dependency)
-3. **Last** in foundation deployment
-
-## Resource Budget
-- Requests: 1.5Gi memory, 1.0 CPU
-- Limits: 2.9Gi memory, 1.9 CPU
-- Priority: foundation-medium
+## Important Notes
+- **Deployed Last**: Avoids self-monitoring bootstrap issues
+- **Resource Budget**: 1.5GB RAM request, 2.9GB RAM limit for Observability Plane
+- **Cardinality Control**: Strict limits (<50k series) to prevent resource exhaustion

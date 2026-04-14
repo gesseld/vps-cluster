@@ -1,39 +1,30 @@
-# Data Plane
+# Phase 2: Data Plane
+
+**Deployment Sequence:** After Phase 1 (Shared Foundations), before Phase 3 (Control Plane)
 
 ## Purpose
 The **memory and nervous system**: persistent storage, event streaming, caching, and object storage. I/O bound, optimized for throughput. Contains the only stateful data in the foundation.
 
 ## Components
+1. **PostgreSQL**: Primary + async read replica with RLS, connection pooling
+2. **NATS JetStream**: 3-replica HA cluster with backpressure controls
+3. **Temporal Server**: 2-replica HA workflow engine (corrected: in Data Plane)
+4. **MinIO**: S3-compatible storage with lifecycle policies and replication
+5. **Redis**: Cache tier with RDB-only snapshots and memory protection
 
-### 1. PostgreSQL (Primary Database)
-- Version: 15 with RLS (Row-Level Security)
-- HA: Primary + async read replica
-- Connection pooling with pgBouncer
-- Automated backups to S3
+## Deployment Order
+1. PostgreSQL (database)
+2. NATS (messaging)
+3. Redis (caching)
+4. MinIO (storage)
+5. Temporal (workflow engine)
 
-### 2. NATS JetStream (Event Streaming)
-- 3-replica HA cluster
-- JetStream persistence
-- Backpressure monitoring
-- Streams: DOCUMENTS, EXECUTION, OBSERVABILITY
+## Validation
+```bash
+./scripts/validate-phase-gates.sh 2
+```
 
-### 3. Redis (Caching)
-- Multi-role: sessions, rate limiting, semantic cache
-- RDB snapshots only (no AOF)
-- Memory protection with LRU eviction
-
-### 4. Hetzner S3 (Object Storage)
-- S3-compatible object storage
-- WORM compliance for auditability
-- Streaming replication to DR target
-- Lifecycle management
-
-## Deployment Sequence
-1. **After** Phase 0: Budget Scaffolding
-2. **Before** Control Plane (Temporal dependency)
-3. **Before** Observability Plane (metrics dependency)
-
-## Resource Budget
-- Requests: 4.2Gi memory, 2.8 CPU
-- Limits: 7.1Gi memory, 4.8 CPU
-- Priority: foundation-critical for PostgreSQL, NATS
+## Important Notes
+- **Temporal in Data Plane**: Corrected from architectural specification (was incorrectly in Control Plane)
+- **Topology Awareness**: PostgreSQL and MinIO scheduled to `node-role=storage-heavy` nodes
+- **Resource Budget**: 4.2GB RAM request, 7.1GB RAM limit for Data Plane

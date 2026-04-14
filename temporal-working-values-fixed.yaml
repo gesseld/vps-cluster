@@ -1,0 +1,97 @@
+USER-SUPPLIED VALUES:
+server:
+  config:
+    persistence:
+      datastores:
+        default:
+          sql:
+            connectAddr: postgres-primary.data-plane.svc.cluster.local:5432
+            connectAttributes:
+              sslmode: disable
+            connectProtocol: tcp
+            createDatabase: false
+            databaseName: temporal
+            driverName: postgres12
+            manageSchema: true
+            maxConnLifetime: 1h
+            maxConns: 15
+            maxIdleConns: 3
+            password: temporaldbpassword
+            pluginName: postgres12
+            user: temporal
+        visibility:
+          sql:
+            connectAddr: postgres-primary.data-plane.svc.cluster.local:5432
+            connectAttributes:
+              sslmode: disable
+            connectProtocol: tcp
+            createDatabase: false
+            databaseName: temporal_visibility
+            driverName: postgres12
+            manageSchema: true
+            maxConnLifetime: 1h
+            maxConns: 8
+            maxIdleConns: 2
+            password: temporaldbpassword
+            pluginName: postgres12
+            user: temporal
+      defaultStore: default
+      numHistoryShards: 256
+      visibilityStore: visibility
+    services:
+      frontend:
+        rpc:
+          keepAliveServerParameters:
+            keepAliveTime: 30s
+            keepAliveTimeout: 10s
+            maxConnectionAge: 30m
+            maxConnectionIdle: 15m
+  frontend:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 200m
+        memory: 192Mi
+      requests:
+        cpu: 100m
+        memory: 96Mi
+  history:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 400m
+        memory: 384Mi
+      requests:
+        cpu: 200m
+        memory: 192Mi
+  matching:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 200m
+        memory: 192Mi
+      requests:
+        cpu: 100m
+        memory: 96Mi
+  podLabels:
+    plane: data
+    tenant: temporal-ha
+  worker:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 200m
+        memory: 192Mi
+      requests:
+        cpu: 100m
+        memory: 96Mi
+  web:
+    enabled: true
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
