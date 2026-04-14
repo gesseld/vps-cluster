@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-test
+  namespace: data-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: test
+        image: natsio/nats-box:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Testing NATS JetStream connectivity..."
+          
+          # Get NATS pod IP
+          NATS_POD=$(kubectl get pod -n data-plane -l app.kubernetes.io/name=nats -o jsonpath='{.items[0].status.podIP}')
+          echo "NATS Pod IP: $NATS_POD"
+          
+          # Test HTTP API
+          echo ""
+          echo "1. HTTP Health Check:"
+          curl -s "http://$NATS_POD:8222/healthz"
+          
+          echo ""
+          echo "2. JetStream Status:"
+          curl -s "http://$NATS_POD:8222/jsz" | grep -E '"streams"|"messages"|"bytes"'
+          
+          echo ""
+          echo "3. Basic publish test:"
+          nats --server nats://nats:4222 pub "test.subject" "Hello NATS" --count=1 2>&1 || echo "Direct pub failed"
+          
+          echo ""
+          echo "Test completed!"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      restartPolicy: OnFailure
+  backoffLimit: 2

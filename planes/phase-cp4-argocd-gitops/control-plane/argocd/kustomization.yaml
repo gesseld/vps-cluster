@@ -1,0 +1,105 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - resource-quota.yaml
+  - argocd-cm.yaml
+  - repository-secret.yaml
+  - applicationsets/
+
+# Helm release configuration for ArgoCD
+helmCharts:
+  - name: argocd
+    repo: https://argoproj.github.io/argo-helm
+    releaseName: argocd
+    version: 2.9.0
+    namespace: argocd
+    valuesInline:
+      global:
+        image:
+          tag: v2.9.0
+      
+      server:
+        replicaCount: 1
+        service:
+          type: ClusterIP
+        extraArgs:
+          - --insecure
+        resources:
+          limits:
+            memory: 512Mi
+            cpu: 500m
+          requests:
+            memory: 256Mi
+            cpu: 250m
+      
+      controller:
+        replicaCount: 1
+        resources:
+          limits:
+            memory: 256Mi
+            cpu: 250m
+          requests:
+            memory: 128Mi
+            cpu: 125m
+        
+        # Enable automated sync with pruning
+        applicationSet:
+          enabled: true
+      
+      repoServer:
+        replicaCount: 1
+        resources:
+          limits:
+            memory: 256Mi
+            cpu: 250m
+          requests:
+            memory: 128Mi
+            cpu: 125m
+        
+        # Disable polling parallelism
+        parallelism:
+          limit: 0
+      
+      redis:
+        enabled: true
+        replicaCount: 1
+        resources:
+          limits:
+            memory: 128Mi
+            cpu: 100m
+          requests:
+            memory: 64Mi
+            cpu: 50m
+
+# Configuration for Git repository
+configMapGenerator:
+  - name: argocd-git-config
+    behavior: merge
+    literals:
+      - GIT_REPO_URL=git@github.com:your-org/your-repo.git
+      - GIT_BRANCH=main
+      - GIT_PATH=manifests
+
+# Secret generator for Git credentials (example - use sops or external-secrets in production)
+secretGenerator:
+  - name: argocd-repo-secret
+    type: Opaque
+    literals:
+      - username=git
+      - password=your-git-token-here
+    options:
+      disableNameSuffixHash: true
+
+# Patches for resource limits
+patchesStrategicMerge:
+  - patch-memory-limits.yaml
+
+# Common labels
+commonLabels:
+  app.kubernetes.io/name: argocd
+  app.kubernetes.io/instance: argocd
+  app.kubernetes.io/part-of: gitops-controller
+  app.kubernetes.io/managed-by: kustomize

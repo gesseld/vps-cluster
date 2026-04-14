@@ -1,0 +1,209 @@
+# NetworkPolicy Interface Matrix
+# Documents explicit allow rules for known dependencies
+#
+# Format:
+# - source: Namespace/Pod selector that initiates traffic
+# - destination: Service/Port that receives traffic  
+# - protocol: TCP/UDP
+# - port: Destination port
+# - description: Purpose of the connection
+
+allowRules:
+  # DNS Resolution (essential for all pods)
+  - name: dns-egress
+    source:
+      namespaceSelector: {}
+      podSelector: {}
+    destination:
+      namespace: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    protocol: TCP
+    port: 53
+    description: DNS resolution for all pods
+    priority: 1000
+
+  - name: dns-egress-udp
+    source:
+      namespaceSelector: {}
+      podSelector: {}
+    destination:
+      namespace: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    protocol: UDP
+    port: 53
+    description: DNS resolution (UDP) for all pods
+    priority: 1001
+
+  # Control Plane to Data Plane communications
+  - name: control-to-postgres
+    source:
+      namespace: control-plane
+      podSelector: {}
+    destination:
+      namespace: data-plane
+      podSelector:
+        matchLabels:
+          app: postgres
+    protocol: TCP
+    port: 5432
+    description: Control plane apps to PostgreSQL
+    priority: 1100
+
+  - name: control-to-redis
+    source:
+      namespace: control-plane
+      podSelector: {}
+    destination:
+      namespace: data-plane
+      podSelector:
+        matchLabels:
+          app: redis
+    protocol: TCP
+    port: 6379
+    description: Control plane apps to Redis cache
+    priority: 1101
+
+  # Observability access
+  - name: all-to-prometheus
+    source:
+      namespaceSelector: {}
+      podSelector: {}
+    destination:
+      namespace: observability
+      podSelector:
+        matchLabels:
+          app: prometheus
+    protocol: TCP
+    port: 9090
+    description: All pods to Prometheus metrics
+    priority: 1200
+
+  - name: all-to-grafana
+    source:
+      namespaceSelector: {}
+      podSelector: {}
+    destination:
+      namespace: observability
+      podSelector:
+        matchLabels:
+          app: grafana
+    protocol: TCP
+    port: 3000
+    description: All pods to Grafana dashboards
+    priority: 1201
+
+  # Storage access
+  - name: data-to-storage
+    source:
+      namespace: data-plane
+      podSelector: {}
+    destination:
+      namespace: storage
+      podSelector: {}
+    protocol: TCP
+    ports: [9000, 9001]
+    description: Data plane apps to storage services
+    priority: 1300
+
+  # Security scanning
+  - name: security-to-all
+    source:
+      namespace: security
+      podSelector:
+        matchLabels:
+          app: scanner
+    destination:
+      namespaceSelector: {}
+      podSelector: {}
+    protocol: TCP
+    ports: [80, 443, 8080, 8443]
+    description: Security scanner to all services
+    priority: 1400
+
+  # Egress to external services (restricted)
+  - name: egress-https
+    source:
+      namespaceSelector: {}
+      podSelector: {}
+    destination:
+      ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    protocol: TCP
+    port: 443
+    description: Egress to external HTTPS services
+    priority: 2000
+
+  - name: egress-ntp
+    source:
+      namespaceSelector: {}
+      podSelector: {}
+    destination:
+      ipBlock:
+        cidr: 0.0.0.0/0
+    protocol: UDP
+    port: 123
+    description: NTP time synchronization
+    priority: 2001
+
+# Egress restrictions per plane
+egressRestrictions:
+  control-plane:
+    allowed:
+      - dns-egress
+      - dns-egress-udp
+      - control-to-postgres
+      - control-to-redis
+      - all-to-prometheus
+      - all-to-grafana
+      - egress-https
+      - egress-ntp
+    denied: all
+
+  data-plane:
+    allowed:
+      - dns-egress
+      - dns-egress-udp
+      - data-to-storage
+      - all-to-prometheus
+      - egress-https
+    denied: all
+
+  observability:
+    allowed:
+      - dns-egress
+      - dns-egress-udp
+      - egress-https
+      - egress-ntp
+    denied: all
+
+  security:
+    allowed:
+      - dns-egress
+      - dns-egress-udp
+      - security-to-all
+      - egress-https
+    denied: all
+
+  network:
+    allowed:
+      - dns-egress
+      - dns-egress-udp
+      - egress-https
+      - egress-ntp
+    denied: all
+
+  storage:
+    allowed:
+      - dns-egress
+      - dns-egress-udp
+      - all-to-prometheus
+      - egress-https
+    denied: all

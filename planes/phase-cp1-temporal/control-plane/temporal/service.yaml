@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-headless
+  namespace: control-plane
+  labels:
+    app: temporal
+    component: server
+spec:
+  clusterIP: None
+  ports:
+  - name: frontend
+    port: 7233
+    targetPort: frontend
+  - name: history
+    port: 7234
+    targetPort: history
+  - name: matching
+    port: 7235
+    targetPort: matching
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+  - name: internal-frontend
+    port: 7236
+    targetPort: int-frontend
+  - name: internal-history
+    port: 7237
+    targetPort: int-history
+  - name: internal-matching
+    port: 7238
+    targetPort: int-matching
+  selector:
+    app: temporal
+    component: server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+  namespace: control-plane
+  labels:
+    app: temporal
+    component: frontend
+spec:
+  type: ClusterIP
+  ports:
+  - name: frontend
+    port: 7233
+    targetPort: frontend
+  selector:
+    app: temporal
+    component: server

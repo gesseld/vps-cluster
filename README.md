@@ -1,38 +1,77 @@
-# hcloud: Command-line interface for Hetzner Cloud
+# VPS Cluster Deployment - Clean Architecture
 
-[![Release](https://img.shields.io/github/v/release/hetznercloud/cli)](https://github.com/hetznercloud/cli/releases/latest)
-![Go Version](https://img.shields.io/github/go-mod/go-version/hetznercloud/cli/main?label=Go)
-[![CI](https://github.com/hetznercloud/cli/actions/workflows/ci.yml/badge.svg)](https://github.com/hetznercloud/cli/actions/workflows/ci.yml)
-[![Build](https://github.com/hetznercloud/cli/actions/workflows/build.yml/badge.svg)](https://github.com/hetznercloud/cli/actions/workflows/build.yml)
-[![codecov](https://codecov.io/gh/hetznercloud/cli/graph/badge.svg?token=fFDgg6Ua6U)](https://codecov.io/gh/hetznercloud/cli)
+This repository contains a clean, production-ready Kubernetes cluster deployment for VPS environments following a strict architectural specification.
 
-`hcloud` is a command-line interface for interacting with Hetzner Cloud.
+## Architecture Overview
 
-[![asciicast](https://asciinema.org/a/157991.png)](https://asciinema.org/a/157991)
+The deployment follows a multi-plane architecture with strict deployment sequencing:
 
-## Docs
+1. **Phase 0: Budget Scaffolding** (MANDATORY FIRST)
+   - PriorityClasses
+   - ResourceQuotas and LimitRanges
+   - StorageClass
+   - Node Labels
+   - Network Policies
 
-- See [setting up hcloud](docs/tutorials/setup-hcloud-cli.md) for instructions on how to install and configure the CLI.
-- See the [manual](docs/reference/manual/hcloud.md) for a list of all available commands and their options.
+2. **Data Plane** (Phase 2)
+   - PostgreSQL
+   - Temporal (Workflow Engine)
+   - NATS (Messaging)
+   - Redis (Caching)
+   - S3-Compatible Storage
 
-For additional information, see the [documentation](docs).
+3. **Control Plane** (Phase 3)
+   - Kyverno (Policy Engine)
+   - SPIRE (Identity Management)
+   - ArgoCD (GitOps)
+   - Control NATS
 
-## Experimental features
+4. **Observability Plane** (Phase 4)
+   - VictoriaMetrics (Metrics)
+   - Fluent Bit (Logging)
+   - Loki (Log Aggregation)
+   - AlertManager (Alerts)
 
-Experimental features are published as part of our regular releases (e.g. a product
-public beta). During an experimental phase, breaking changes on those features may occur
-within minor releases.
+## Key Features
 
-The stability of experimental features is not related to the stability of its upstream API.
+- **Temporal in Data Plane**: Corrected architectural placement (was incorrectly in Control Plane)
+- **Strict Deployment Sequence**: Phase 0 MUST be deployed before any plane workloads
+- **Production-Ready**: HA configurations, proper resource management
+- **Clean Structure**: Organized by architectural planes
+- **Documentation**: Complete deployment guides and validation scripts
 
-Experimental features have different levels of maturity (e.g. experimental, alpha, beta)
-based on the maturity of the upstream API.
+## Getting Started
 
-While experimental features will be announced in the release notes, you can also find
-whether a command is experimental in its help text. Using experimental commands will show a warning
-when running them. You can suppress this warning by enabling the `no-experimental-warnings` option.
+1. Deploy Phase 0 first:
+   ```bash
+   cd phase-0-budget-scaffolding
+   ./deploy-phase-0.sh
+   ```
+
+2. Follow the deployment sequence in `DEPLOYMENT_SEQUENCE.md`
+
+3. Validate deployment with validation scripts
+
+## Repository Structure
+
+```
+├── phase-0-budget-scaffolding/  # Budget scaffolding (deploy first)
+├── data-plane/                  # Temporal, PostgreSQL, NATS, Redis, S3
+├── control-plane/               # Kyverno, SPIRE, ArgoCD, Control NATS
+├── observability-plane/         # VictoriaMetrics, Fluent Bit, Loki
+├── shared/                      # PKI, RBAC, Network Policies
+├── docs/                        # Architectural documentation
+├── archive/                     # Archived messy state (reference only)
+└── README.md                    # This file
+```
+
+## Important Notes
+
+- **Temporal Version**: 1.30.4
+- **Helm Version**: v4.1.3
+- **Architectural Specification**: v4.0.4 (updated to place Temporal in Data Plane)
+- **Non-negotiable**: Phase 0 MUST be deployed before any plane workloads
 
 ## License
 
-MIT license
-
+MIT License - See LICENSE file for details.

@@ -1,0 +1,257 @@
+# CP-5: Control Plane NATS (Stateless Signaling)
+# Consolidated manifest for stateless NATS deployment
+# Includes ConfigMap, Deployment, Service, and authentication
+
+---
+# ConfigMap for NATS configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-stateless-config
+  namespace: control-plane
+  labels:
+    app: nats-stateless
+    component: nats
+    plane: control
+data:
+  nats.conf: |
+    # CP-5: Stateless NATS Configuration for Control Plane
+    port: 4222
+    http_port: 8222
+    
+    # TLS Configuration (enabled if certificates available)
+    tls {
+      cert_file: "/etc/nats-certs/tls.crt"
+      key_file:  "/etc/nats-certs/tls.key"
+      ca_file:   "/etc/nats-certs/ca.crt"
+      timeout: 2
+    }
+    
+    # Monitoring
+    server_name: "cp5-nats-stateless"
+    server_tags: ["control-plane", "stateless", "signaling"]
+    
+    # Logging
+    logtime: true
+    log_file: "/dev/stdout"
+    debug: false
+    trace: false
+    
+    # Accounts and Authorization
+    accounts {
+      CONTROL {
+        users: [
+          { user: "controller", password: "${CONTROLLER_PASSWORD:-changeme}" }
+        ]
+        exports: [
+          { service: "control.>" }
+          { stream: "control.>" }
+        ]
+        imports: [
+          { service: { account: "AUDIT", subject: "control.audit.>" } }
+        ]
+      }
+      
+      AUDIT {
+        users: [
+          { user: "auditor", password: "${AUDITOR_PASSWORD:-changeme}" }
+        ]
+        exports: [
+          { service: "control.audit.>" }
+          { stream: "control.audit.>" }
+        ]
+      }
+      
+      # System account for monitoring
+      SYS {
+        users: [
+          { user: "sysadmin", password: "${SYSADMIN_PASSWORD:-changeme}" }
+        ]
+      }
+    }
+    
+    # System account for monitoring
+    system_account: "SYS"
+    
+    # JetStream disabled (stateless)
+    jetstream: false
+    
+    # Cluster configuration (for future HA)
+    cluster {
+      port: 6222
+      routes: []
+    }
+    
+    # Leaf node configuration (for connecting to data plane)
+    leafnodes {
+      port: 7422
+    }
+
+---
+# Authentication Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nats-auth-secrets
+  namespace: control-plane
+  labels:
+    app: nats-stateless
+    component: nats
+type: Opaque
+stringData:
+  controller-password: "controller-$(openssl rand -hex 8)"
+  auditor-password: "auditor-$(openssl rand -hex 8)"
+  sysadmin-password: "sysadmin-$(openssl rand -hex 8)"
+
+---
+# Deployment for stateless NATS
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-stateless
+  namespace: control-plane
+  labels:
+    app: nats-stateless
+    component: nats
+    plane: control
+    stateless: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nats-stateless
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nats-stateless
+        component: nats
+        plane: control
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: nats
+        image: nats:2.10-alpine
+        imagePullPolicy: IfNotPresent
+        args: ["-c", "/etc/nats/nats.conf"]
+        ports:
+        - containerPort: 4222
+          name: client
+          protocol: TCP
+        - containerPort: 8222
+          name: monitor
+          protocol: TCP
+        - containerPort: 6222
+          name: cluster
+          protocol: TCP
+        - containerPort: 7422
+          name: leaf
+          protocol: TCP
+        env:
+        - name: CONTROLLER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth-secrets
+              key: controller-password
+              optional: true
+        - name: AUDITOR_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth-secrets
+              key: auditor-password
+              optional: true
+        - name: SYSADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nats-auth-secrets
+              key: sysadmin-password
+              optional: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8222
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8222
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: nats-config
+          mountPath: /etc/nats
+          readOnly: true
+        - name: nats-certs
+          mountPath: /etc/nats-certs
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: nats-config
+        configMap:
+          name: nats-stateless-config
+      - name: nats-certs
+        secret:
+          secretName: nats-stateless-tls
+          optional: true
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+
+---
+# Service for NATS
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-stateless
+  namespace: control-plane
+  labels:
+    app: nats-stateless
+    component: nats
+    plane: control
+spec:
+  selector:
+    app: nats-stateless
+  ports:
+  - name: client
+    port: 4222
+    targetPort: 4222
+    protocol: TCP
+  - name: monitor
+    port: 8222
+    targetPort: 8222
+    protocol: TCP
+  - name: cluster
+    port: 6222
+    targetPort: 6222
+    protocol: TCP
+  - name: leaf
+    port: 7422
+    targetPort: 7422
+    protocol: TCP
+  type: ClusterIP

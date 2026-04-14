@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: data-plane-quota
+  namespace: data-plane
+spec:
+  hard:
+    requests.memory: "4.2Gi"
+    limits.memory: "7.1Gi"
+    requests.cpu: "2.8"
+    limits.cpu: "4.8"
+    pods: "20"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: data-plane-defaults
+  namespace: data-plane
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      memory: "256Mi"
+      cpu: "100m"
+    default:
+      memory: "512Mi"
+      cpu: "250m"
+    max:
+      memory: "2Gi"
+      cpu: "2"

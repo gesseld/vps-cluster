@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: temporal-pdb
+  namespace: control-plane
+  labels:
+    app: temporal
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: temporal
+      component: server

@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-streams-go
+  namespace: data-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: creator
+        image: golang:1.21
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          cat > /tmp/main.go << 'EOF'
+          package main
+          
+          import (
+            "context"
+            "fmt"
+            "log"
+            "time"
+            "github.com/nats-io/nats.go"
+          )
+          
+          func main() {
+            nc, err := nats.Connect("nats://nats:4222")
+            if err != nil { log.Fatal(err) }
+            defer nc.Close()
+            
+            js, err := nc.JetStream()
+            if err != nil { log.Fatal(err) }
+            
+            streams := []struct{ name string; cfg nats.StreamConfig }{
+              {"DOCUMENTS", nats.StreamConfig{
+                Name: "DOCUMENTS", Subjects: []string{"data.doc.>"},
+                Retention: nats.WorkQueuePolicy, MaxMsgs: 100000,
+                MaxBytes: 5*1024*1024*1024, Storage: nats.FileStorage,
+                NumReplicas: 1, Discard: nats.DiscardOldPolicy,
+                DuplicateWindow: 2*time.Minute, MaxMsgSize: 1048576,
+              }},
+              {"EXECUTION", nats.StreamConfig{
+                Name: "EXECUTION", Subjects: []string{"exec.task.>"},
+                Retention: nats.InterestPolicy, MaxMsgs: 50000,
+                MaxBytes: 2*1024*1024*1024, MaxAge: 24*time.Hour,
+                Storage: nats.FileStorage, NumReplicas: 1,
+                Discard: nats.DiscardOldPolicy, DuplicateWindow: 1*time.Minute,
+                MaxMsgSize: 524288,
+              }},
+              {"OBSERVABILITY", nats.StreamConfig{
+                Name: "OBSERVABILITY", Subjects: []string{"obs.metric.>"},
+                Retention: nats.LimitsPolicy, MaxBytes: 1*1024*1024*1024,
+                Storage: nats.FileStorage, NumReplicas: 1,
+                Discard: nats.DiscardOldPolicy, DuplicateWindow: 30*time.Second,
+                MaxMsgSize: 131072,
+              }},
+            }
+            
+            ctx := context.Background()
+            for _, s := range streams {
+              fmt.Printf("Creating %s...\n", s.name)
+              _, err := js.AddStream(&s.cfg, nats.Context(ctx))
+              if err != nil { fmt.Printf("  Error: %v\n", err) }
+              else { fmt.Printf("  OK\n") }
+            }
+            
+            fmt.Println("\nDone!")
+          }
+          EOF
+          
+          cd /tmp && go mod init tmp && go get github.com/nats-io/nats.go && go run main.go
+        resources:
+          limits:
+            memory: 256Mi
+            cpu: 500m
+          requests:
+            memory: 128Mi
+            cpu: 100m
+      restartPolicy: OnFailure
+  backoffLimit: 2

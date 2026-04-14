@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server-config
+  namespace: spire
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      socket_path = "/tmp/spire-server/private/api.sock"
+      trust_domain = "cluster.local"
+      data_dir = "/run/spire/data"
+      log_level = "DEBUG"
+      ca_subject = {
+        country = ["US"],
+        organization = ["SPIRE"],
+        common_name = "",
+      }
+    }
+
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "postgres"
+          connection_string = "host=postgresql-primary.data-plane.svc.cluster.local port=5432 user=app password=GcaOji6st0VY8ioKx8nP0d8L1NsUmcm8QcAM5TW4uPM= dbname=spire sslmode=disable"
+        }
+      }
+
+      KeyManager "disk" {
+        plugin_data {
+          keys_path = "/run/spire/data/keys.json"
+        }
+      }
+
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "k3s-cluster" = {
+              service_account_allow_list = ["spire:spire-agent"]
+              audience = ["k3s"]
+            }
+          }
+        }
+      }
+    }

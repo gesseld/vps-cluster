@@ -1,0 +1,58 @@
+# Temporal dynamic configuration
+# Retention policies and HA settings
+
+frontend:
+  # Retention settings
+  retention: 72h  # 3 days for completed workflows
+  visibilityRetention: 168h  # 7 days for visibility records
+  # mTLS settings
+  enableTLS: true
+  tls:
+    server:
+      certFile: "/etc/temporal/tls/tls.crt"
+      keyFile: "/etc/temporal/tls/tls.key"
+      clientCaFile: "/etc/temporal/tls/ca.crt"
+      requireClientAuth: true
+  
+  # HA settings
+  enableRemoteClusterMetadataRefresh: true
+  maxConcurrentLongPollRequests: 5000
+  
+  # Rate limiting
+  rps: 10000
+
+history:
+  # Shard management for HA
+  numberOfShards: 512
+  enableShardIDMetrics: true
+  
+  # Retention
+  workflowExecutionRetentionPeriod: 72h
+
+matching:
+  # Task queue management
+  maxTaskqueueActivitiesPerSecond: 100000
+  loadUserData: true
+
+system:
+  # Advanced visibility
+  enableAdvancedVisibility: true
+  advancedVisibilityWritingMode: "dual"
+  
+  # Archival (disabled for now)
+  enableArchival: false
+
+persistence:
+  # PostgreSQL settings
+  defaultStore: "postgresql"
+  visibilityStore: "postgresql"
+  
+  # Connection pooling
+  numHistoryShards: 512
+  maxQPS: 1000
+
+clusterMetadata:
+  # HA cluster configuration
+  enableGlobalNamespace: false
+  failoverVersionIncrement: 10
+  masterClusterName: "active-active"

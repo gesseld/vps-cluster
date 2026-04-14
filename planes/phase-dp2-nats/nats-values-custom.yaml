@@ -1,0 +1,168 @@
+# Custom values for NATS JetStream deployment
+# Optimized for resource constraints in data-plane namespace
+
+global:
+  jetstream:
+    enabled: true
+    fileStorage:
+      enabled: true
+      storageDirectory: /data/jetstream
+      storageSize: 15Gi
+      storageClassName: hcloud-volumes
+      volumeBindingMode: WaitForFirstConsumer
+  
+  tls:
+    enabled: true
+    secret:
+      name: nats-tls
+
+nats:
+  image: nats:2.10-alpine
+  pullPolicy: IfNotPresent
+  replicaCount: 1
+  
+  # Resource limits - optimized for quota constraints
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  
+  # JetStream configuration
+  jetstream:
+    enabled: true
+    maxMemory: 256M
+    maxFile: 14G
+  
+  # Client port configuration
+  client:
+    enabled: true
+    port: 4222
+    tls:
+      enabled: true
+      secret:
+        name: nats-tls
+  
+  # Cluster port disabled (single replica)
+  cluster:
+    enabled: false
+  
+  # Monitoring port
+  monitor:
+    enabled: true
+    port: 8222
+  
+  # Security context
+  securityContext:
+    enabled: true
+    fsGroup: 1000
+    runAsUser: 1000
+    runAsGroup: 1000
+  
+  # Probes
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Disable optional components to save resources
+natsbox:
+  enabled: false
+
+exporter:
+  enabled: false
+
+reloader:
+  enabled: false
+
+accountserver:
+  enabled: false
+
+# Server configuration
+config:
+  serverConfig: |
+    jetstream {
+      store_dir: "/data/jetstream"
+      max_memory_store: 268435456  # 256Mi
+      max_file_store: 15032385536  # 14Gi
+    }
+    
+    http: 8222
+    
+    tls {
+      cert_file: "/etc/nats/tls/tls.crt"
+      key_file: "/etc/nats/tls/tls.key"
+      ca_file: "/etc/nats/tls/ca.crt"
+    }
+    
+    authorization {
+      users = []
+    }
+    
+    # Pre-configured JetStream streams
+    stream {
+      name: "DOCUMENTS"
+      subjects: ["data.doc.>"]
+      retention: workqueue
+      max_msgs: 100000
+      max_bytes: 5368709120  # 5GB
+      storage: file
+      num_replicas: 1
+      discard: old
+      duplicate_window: 120s
+      max_msg_size: 1048576  # 1MB
+      max_age: 0
+      max_msgs_per_subject: -1
+      allow_rollup: false
+      deny_delete: false
+      deny_purge: false
+      description: "Document processing stream with work queue retention"
+    }
+    
+    stream {
+      name: "EXECUTION"
+      subjects: ["exec.task.>"]
+      retention: interest
+      max_age: 24h
+      storage: file
+      num_replicas: 1
+      discard: old
+      duplicate_window: 60s
+      max_msg_size: 524288  # 512KB
+      max_bytes: 2147483648  # 2GB
+      max_msgs: 50000
+      max_msgs_per_subject: -1
+      allow_rollup: false
+      deny_delete: false
+      deny_purge: false
+      description: "Task execution stream with 24h retention, 2GB limit"
+    }
+    
+    stream {
+      name: "OBSERVABILITY"
+      subjects: ["obs.metric.>"]
+      retention: limits
+      max_bytes: 1073741824  # 1GB
+      storage: file
+      num_replicas: 1
+      discard: old
+      duplicate_window: 30s
+      max_msg_size: 131072  # 128KB
+      max_age: 0
+      max_msgs_per_subject: -1
+      allow_rollup: false
+      deny_delete: false
+      deny_purge: false
+      description: "Observability metrics stream with size limits"
+    }

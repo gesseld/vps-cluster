@@ -1,0 +1,66 @@
+# BS-5 NetworkPolicy: Data Plane Isolation
+# This policy isolates data plane components (applications, services)
+# Apply to: application namespaces
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-plane-isolation
+  namespace: {{ .Namespace }}
+  labels:
+    policy-type: plane-isolation
+    plane: data
+    managed-by: bs5-networkpolicy
+spec:
+  podSelector:
+    matchLabels:
+      # This should match your data plane component labels
+      plane: data
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules: Allow traffic from:
+  # - Ingress controllers
+  # - Other data plane services in same namespace
+  # - Monitoring agents
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx  # Adjust to your ingress namespace
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Namespace }}
+  
+  # Egress rules: Allow traffic to:
+  # - DNS services
+  # - Database services (if applicable)
+  # - External services (restrict to specific IP ranges if needed)
+  egress:
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    # Restrict to common web ports
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443

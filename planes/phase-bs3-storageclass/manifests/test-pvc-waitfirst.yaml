@@ -1,0 +1,16 @@
+# Test PVC for nvme-waitfirst StorageClass
+# Purpose: Verify WaitForFirstConsumer behavior
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-waitfirst
+  labels:
+    test: storageclass-waitfirst
+    purpose: validation
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nvme-waitfirst
+  resources:
+    requests:
+      storage: 1Gi

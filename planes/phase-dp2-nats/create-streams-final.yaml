@@ -1,0 +1,104 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-create-streams-v2
+  namespace: data-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: stream-creator
+        image: python:3.11-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          echo "Installing NATS Python client..."
+          pip install nats-py --quiet
+          
+          cat > /tmp/create_streams.py << 'PYEOF'
+          import asyncio
+          from nats import NATS
+          
+          async def create_streams():
+              print("Connecting to NATS...")
+              nc = await NATS.connect("nats://nats:4222")
+              
+              js = nc.jetstream()
+              
+              streams = [
+                  {
+                      "name": "DOCUMENTS",
+                      "subjects": ["data.doc.>"],
+                      "retention": "workqueue",
+                      "max_msgs": 100000,
+                      "max_bytes": 5368709120,
+                      "storage": "file",
+                      "num_replicas": 1,
+                      "discard": "old",
+                      "duplicate_window": 120,
+                      "max_msg_size": 1048576,
+                      "description": "Document processing stream"
+                  },
+                  {
+                      "name": "EXECUTION", 
+                      "subjects": ["exec.task.>"],
+                      "retention": "interest",
+                      "max_msgs": 50000,
+                      "max_bytes": 2147483648,
+                      "max_age": 86400,
+                      "storage": "file",
+                      "num_replicas": 1,
+                      "discard": "old",
+                      "duplicate_window": 60,
+                      "max_msg_size": 524288,
+                      "description": "Task execution stream"
+                  },
+                  {
+                      "name": "OBSERVABILITY",
+                      "subjects": ["obs.metric.>"],
+                      "retention": "limits",
+                      "max_bytes": 1073741824,
+                      "storage": "file",
+                      "num_replicas": 1,
+                      "discard": "old",
+                      "duplicate_window": 30,
+                      "max_msg_size": 131072,
+                      "description": "Observability metrics stream"
+                  }
+              ]
+              
+              for cfg in streams:
+                  name = cfg.pop("name")
+                  try:
+                      print(f"Creating stream: {name}...")
+                      await js.add_stream(name=name, **cfg)
+                      print(f"  ✓ Created {name}")
+                  except Exception as e:
+                      if "already exists" in str(e).lower():
+                          print(f"  ○ {name} already exists")
+                      else:
+                          print(f"  ✗ Error: {e}")
+              
+              print("\nVerifying streams...")
+              for stream in await js.streams_list():
+                  print(f"  - {stream.config.name}: {stream.state.messages} msgs, {stream.state.bytes} bytes")
+              
+              await nc.close()
+              print("\nDone!")
+          
+          if __name__ == "__main__":
+              asyncio.run(create_streams())
+          PYEOF
+          
+          echo "Running stream creator..."
+          python /tmp/create_streams.py
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      restartPolicy: OnFailure
+  backoffLimit: 3

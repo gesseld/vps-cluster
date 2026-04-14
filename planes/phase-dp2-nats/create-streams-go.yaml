@@ -1,0 +1,109 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-create-streams-go
+  namespace: data-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: stream-creator
+        image: golang:1.21-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          cat > /tmp/create-streams.go << 'EOF'
+          package main
+
+          import (
+            "context"
+            "fmt"
+            "log"
+            "time"
+
+            "github.com/nats-io/nats.go"
+          )
+
+          func main() {
+            nc, err := nats.Connect("nats://nats:4222")
+            if err != nil {
+              log.Fatalf("Failed to connect: %v", err)
+            }
+            defer nc.Close()
+
+            js, err := nc.JetStream()
+            if err != nil {
+              log.Fatalf("Failed to create JetStream context: %v", err)
+            }
+
+            streams := []nats.StreamConfig{
+              {
+                Name:        "DOCUMENTS",
+                Subjects:    []string{"data.doc.>"},
+                Retention:   nats.WorkQueuePolicy,
+                MaxMsgs:     100000,
+                MaxBytes:    5 * 1024 * 1024 * 1024,
+                Storage:     nats.FileStorage,
+                NumReplicas: 1,
+                Discard:     nats.DiscardOldPolicy,
+                Description: "Document processing stream",
+              },
+              {
+                Name:        "EXECUTION",
+                Subjects:    []string{"exec.task.>"},
+                Retention:   nats.InterestPolicy,
+                MaxMsgs:     50000,
+                MaxBytes:    2 * 1024 * 1024 * 1024,
+                MaxAge:      24 * time.Hour,
+                Storage:     nats.FileStorage,
+                NumReplicas: 1,
+                Discard:     nats.DiscardOldPolicy,
+                Description: "Task execution stream",
+              },
+              {
+                Name:        "OBSERVABILITY",
+                Subjects:    []string{"obs.metric.>"},
+                Retention:   nats.LimitsPolicy,
+                MaxBytes:    1 * 1024 * 1024 * 1024,
+                Storage:     nats.FileStorage,
+                NumReplicas: 1,
+                Discard:     nats.DiscardOldPolicy,
+                Description: "Observability metrics stream",
+              },
+            }
+
+            for _, stream := range streams {
+              fmt.Printf("Creating stream: %s...\n", stream.Name)
+              info, err := js.StreamInfo(stream.Name)
+              if err == nil && info != nil {
+                fmt.Printf("  Stream %s already exists\n", stream.Name)
+                continue
+              }
+              _, err = js.AddStream(&stream)
+              if err != nil {
+                fmt.Printf("  Error: %v\n", err)
+                continue
+              }
+              fmt.Printf("  ✓ Created\n")
+            }
+
+            fmt.Println("\nVerifying streams...")
+            streamsInfo, _ := js.StreamsInfo()
+            for _, s := range streamsInfo {
+              fmt.Printf("  - %s: %d messages\n", s.Config.Name, s.State.Messages)
+            }
+            fmt.Println("Done!")
+          }
+          EOF
+          
+          echo "Downloading NATS Go client..."
+          cd /tmp && go mod init streams && go get github.com/nats-io/nats.go && go run create-streams.go
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      restartPolicy: OnFailure
+  backoffLimit: 3

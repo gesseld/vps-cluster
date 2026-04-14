@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-test-producer
+  namespace: data-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: producer
+        image: natsio/nats-box:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Testing NATS JetStream..."
+          
+          # Test basic publish/subscribe
+          echo "1. Testing basic publish..."
+          nats --server nats://nats:4222 pub "test.subject" "Hello NATS" 2>&1 | head -3
+          
+          echo ""
+          echo "2. Testing JetStream publish..."
+          nats --server nats://nats:4222 pub --stream=DOCUMENTS "data.doc.test" "Test document" 2>&1 | head -3
+          
+          echo ""
+          echo "3. Testing JetStream info via HTTP..."
+          NATS_POD_IP=$(getent hosts nats-0 | awk '{print $1}')
+          curl -s "http://$NATS_POD_IP:8222/healthz" 2>&1 || echo "HTTP health check failed"
+          
+          echo ""
+          echo "4. Checking JetStream status..."
+          curl -s "http://$NATS_POD_IP:8222/jsz" 2>&1 | grep -E "(streams|messages|bytes)" || echo "JetStream status check failed"
+          
+          echo ""
+          echo "Test completed!"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+      restartPolicy: OnFailure
+  backoffLimit: 3

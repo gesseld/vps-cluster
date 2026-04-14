@@ -1,0 +1,435 @@
+# VMAgent Configuration for NATS JetStream Metrics
+# This config can be added to your existing VMAgent deployment
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-vmagent-scrape-config
+  namespace: default  # Change to your VMAgent namespace
+  labels:
+    app: vmagent
+    component: scrape-config
+    metric-source: nats-jetstream
+data:
+  # Main scrape configuration for NATS JetStream
+  nats-jetstream-scrape.yaml: |
+    # VMAgent scrape configuration for NATS JetStream metrics
+    scrape_configs:
+      - job_name: 'nats-jetstream'
+        scrape_interval: 15s
+        scrape_timeout: 10s
+        metrics_path: '/metrics'
+        scheme: 'http'
+        
+        # Static target configuration
+        static_configs:
+          - targets: ['nats-exporter.default.svc.cluster.local:7777']
+            labels:
+              component: 'nats-jetstream'
+              cluster: 'default'
+              job: 'nats-jetstream'
+        
+        # Metric relabeling for VictoriaMetrics optimization
+        metric_relabel_configs:
+          # Keep only NATS metrics to reduce storage
+          - source_labels: [__name__]
+            regex: 'nats_.*'
+            action: keep
+          
+          # Add stream label to all relevant metrics
+          - source_labels: [stream]
+            regex: '(.*)'
+            target_label: stream
+            replacement: '$1'
+            action: replace
+          
+          # Add consumer label
+          - source_labels: [consumer]
+            regex: '(.*)'
+            target_label: consumer
+            replacement: '$1'
+            action: replace
+          
+          # Optional: Drop high-cardinality labels if not needed
+          # - source_labels: [pod]
+          #   regex: '.*'
+          #   action: labeldrop
+        
+        # Target relabeling
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: instance
+            replacement: 'nats-exporter.default.svc.cluster.local:7777'
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - target_label: job
+            replacement: 'nats-jetstream'
+  
+  # Kubernetes service discovery configuration
+  nats-kubernetes-sd.yaml: |
+    # Kubernetes service discovery for automatic pod discovery
+    scrape_configs:
+      - job_name: 'kubernetes-pods-nats'
+        scrape_interval: 15s
+        scrape_timeout: 10s
+        metrics_path: '/metrics'
+        scheme: 'http'
+        
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [default]  # Change to your NATS namespace
+        
+        relabel_configs:
+          # Only scrape pods with nats exporter labels
+          - source_labels: [__meta_kubernetes_pod_label_app, __meta_kubernetes_pod_label_component]
+            regex: 'nats;exporter'
+            action: keep
+          
+          # Get pod metadata
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          
+          # Construct the target URL from pod IP
+          - source_labels: [__meta_kubernetes_pod_ip]
+            regex: '(.*)'
+            target_label: __address__
+            replacement: '$1:7777'
+          
+          # Add standard labels
+          - target_label: component
+            replacement: 'nats-jetstream'
+          - target_label: job
+            replacement: 'nats-jetstream'
+          - target_label: cluster
+            replacement: 'default'
+  
+  # Alert rules for VMAlert
+  nats-vmalert-rules.yaml: |
+    # VMAlert rules for NATS JetStream backpressure monitoring
+    groups:
+      - name: nats_jetstream_backpressure
+        interval: 30s  # Evaluation interval
+        
+        rules:
+          # DOCUMENTS stream backpressure > 80%
+          - alert: NATSStreamDocumentsBackpressureHigh
+            expr: |
+              nats_jetstream_stream_total_bytes{stream="DOCUMENTS"} 
+              / 
+              nats_jetstream_stream_config_max_bytes{stream="DOCUMENTS"} > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              component: nats
+              stream: DOCUMENTS
+              alertname: nats_backpressure_high
+            annotations:
+              summary: "DOCUMENTS stream backpressure high (>80%)"
+              description: |
+                DOCUMENTS stream is at {{ $value | printf "%.2f" }}% capacity.
+                Stream: {{ $labels.stream }}
+                Current: {{ $value | humanizePercentage }}
+                Action: Consider increasing stream limits or adding consumers.
+          
+          # EXECUTION stream backpressure > 80%
+          - alert: NATSStreamExecutionBackpressureHigh
+            expr: |
+              nats_jetstream_stream_total_bytes{stream="EXECUTION"} 
+              / 
+              nats_jetstream_stream_config_max_bytes{stream="EXECUTION"} > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              component: nats
+              stream: EXECUTION
+              alertname: nats_backpressure_high
+            annotations:
+              summary: "EXECUTION stream backpressure high (>80%)"
+              description: |
+                EXECUTION stream is at {{ $value | printf "%.2f" }}% capacity.
+                Stream: {{ $labels.stream }}
+                Current: {{ $value | humanizePercentage }}
+                Action: Check task processing rate or increase retention.
+          
+          # OBSERVABILITY stream backpressure > 80%
+          - alert: NATSStreamObservabilityBackpressureHigh
+            expr: |
+              nats_jetstream_stream_total_bytes{stream="OBSERVABILITY"} 
+              / 
+              nats_jetstream_stream_config_max_bytes{stream="OBSERVABILITY"} > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              component: nats
+              stream: OBSERVABILITY
+              alertname: nats_backpressure_high
+            annotations:
+              summary: "OBSERVABILITY stream backpressure high (>80%)"
+              description: |
+                OBSERVABILITY stream is at {{ $value | printf "%.2f" }}% capacity.
+                Stream: {{ $labels.stream }}
+                Current: {{ $value | humanizePercentage }}
+                Action: Reduce metric frequency or increase stream size.
+          
+          # Consumer pending messages > 1000
+          - alert: NATSConsumerPendingMessagesHigh
+            expr: |
+              nats_jetstream_stream_consumer_pending_msgs > 1000
+            for: 2m
+            labels:
+              severity: warning
+              component: nats
+              alertname: nats_consumer_pending_high
+            annotations:
+              summary: "NATS consumer has high pending messages (>1000)"
+              description: |
+                Consumer {{ $labels.consumer }} for stream {{ $labels.stream }}
+                has {{ $value }} pending messages.
+                Action: Check consumer processing speed or scale consumers.
+          
+          # NATS server down
+          - alert: NATSServerDown
+            expr: |
+              up{job="nats-jetstream"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              component: nats
+              alertname: nats_server_down
+            annotations:
+              summary: "NATS server is down"
+              description: |
+                NATS metrics exporter has been down for more than 1 minute.
+                Action: Check NATS pod status and logs.
+          
+          # Stream message count backpressure > 80%
+          - alert: NATSStreamMessagesBackpressureHigh
+            expr: |
+              nats_jetstream_stream_total_msgs{stream="DOCUMENTS"} 
+              / 
+              nats_jetstream_stream_config_max_msgs{stream="DOCUMENTS"} > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              component: nats
+              stream: DOCUMENTS
+              alertname: nats_messages_backpressure_high
+            annotations:
+              summary: "DOCUMENTS stream message count high (>80%)"
+              description: |
+                DOCUMENTS stream has {{ $value | printf "%.2f" }}% of max messages.
+                Current: {{ $labels.nats_jetstream_stream_total_msgs }}
+                Max: {{ $labels.nats_jetstream_stream_config_max_msgs }}
+                Action: Consider increasing max_msgs or processing rate.
+
+---
+# VMAgent additional scrape config secret (if using VictoriaMetrics single/cluster)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nats-vm-extra-scrape-config
+  namespace: default  # Change to VictoriaMetrics namespace
+  labels:
+    app: victoria-metrics
+    component: extra-scrape-config
+type: Opaque
+stringData:
+  nats-jetstream-scrape.yaml: |
+    # Extra scrape config for VictoriaMetrics single/cluster
+    - job_name: 'nats-jetstream'
+      scrape_interval: 15s
+      static_configs:
+        - targets: ['nats-exporter.default.svc.cluster.local:7777']
+          labels:
+            component: 'nats-jetstream'
+            cluster: 'default'
+
+---
+# Instructions for VMAgent integration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-vmagent-integration-instructions
+  namespace: default
+  labels:
+    app: nats
+    component: documentation
+data:
+  README.md: |
+    # VMAgent Integration for NATS JetStream
+    
+    ## Integration Methods
+    
+    ### Method 1: Add to Existing VMAgent ConfigMap
+    
+    1. Get your current VMAgent configuration:
+       ```bash
+       kubectl get configmap vmagent-config -o yaml > vmagent-config.yaml
+       ```
+    
+    2. Add the NATS scrape config from `nats-jetstream-scrape.yaml`
+    
+    3. Update the ConfigMap:
+       ```bash
+       kubectl apply -f vmagent-config.yaml
+       ```
+    
+    4. Restart VMAgent:
+       ```bash
+       kubectl rollout restart deployment/vmagent
+       ```
+    
+    ### Method 2: Use as Separate ConfigMap (Recommended)
+    
+    1. Apply the VMAgent config:
+       ```bash
+       kubectl apply -f data-plane/nats/vmagent-config.yaml
+       ```
+    
+    2. Ensure VMAgent is configured to watch additional ConfigMaps:
+       ```yaml
+       # In VMAgent deployment
+       args:
+         - -promscrape.config=/etc/vmagent/config/*.yaml
+       volumeMounts:
+         - name: extra-config
+           mountPath: /etc/vmagent/config
+       volumes:
+         - name: extra-config
+           configMap:
+             name: nats-vmagent-scrape-config
+       ```
+    
+    ### Method 3: VictoriaMetrics Single/Cluster
+    
+    If using VictoriaMetrics single or cluster with built-in scrape:
+    
+    1. Create the secret:
+       ```bash
+       kubectl apply -f data-plane/nats/vmagent-config.yaml
+       ```
+    
+    2. Mount in VictoriaMetrics deployment:
+       ```yaml
+       volumes:
+         - name: extra-scrape-config
+           secret:
+             secretName: nats-vm-extra-scrape-config
+       volumeMounts:
+         - name: extra-scrape-config
+           mountPath: /etc/victoria-metrics/extra-scrape-configs
+       ```
+    
+    ## Verification
+    
+    ### Check VMAgent Targets
+    ```bash
+    # Port-forward to VMAgent
+    kubectl port-forward svc/vmagent 8429:8429
+    
+    # Check targets
+    curl http://localhost:8429/targets | grep nats
+    ```
+    
+    ### Check Metrics in VictoriaMetrics
+    ```bash
+    # Query NATS metrics
+    curl -g 'http://victoriametrics:8428/api/v1/query?query=up{job="nats-jetstream"}'
+    
+    # Should return value 1 if scraping successfully
+    ```
+    
+    ### Check Specific Metrics
+    ```bash
+    # Stream backpressure
+    curl -g 'http://victoriametrics:8428/api/v1/query?query=nats_jetstream_stream_total_bytes{stream="DOCUMENTS"}/nats_jetstream_stream_config_max_bytes{stream="DOCUMENTS"}*100'
+    
+    # Consumer pending messages
+    curl -g 'http://victoriametrics:8428/api/v1/query?query=nats_jetstream_stream_consumer_pending_msgs'
+    ```
+    
+    ## Troubleshooting
+    
+    ### No Targets Appearing
+    1. Check VMAgent logs:
+       ```bash
+       kubectl logs deployment/vmagent | grep -i nats
+       ```
+    
+    2. Verify ConfigMap is mounted:
+       ```bash
+       kubectl exec deployment/vmagent -- ls -la /etc/vmagent/config/
+       ```
+    
+    3. Check ConfigMap content:
+       ```bash
+       kubectl exec deployment/vmagent -- cat /etc/vmagent/config/nats-jetstream-scrape.yaml
+       ```
+    
+    ### Scrape Errors
+    1. Check endpoint connectivity:
+       ```bash
+       kubectl run -it --rm debug --image=curlimages/curl -- \
+         curl http://nats-exporter.default.svc.cluster.local:7777/metrics
+       ```
+    
+    2. Check NATS exporter logs:
+       ```bash
+       kubectl logs -l app=nats,component=exporter
+       ```
+    
+    3. Check VMAgent target status:
+       ```bash
+       curl http://vmagent:8429/api/v1/targets | jq '.data[] | select(.labels.job=="nats-jetstream")'
+       ```
+    
+    ## Performance Considerations
+    
+    ### Scrape Interval
+    - **15s**: Default, good balance of freshness vs load
+    - **30s**: Lower load, less frequent updates
+    - **5s**: High resolution, higher load
+    
+    ### Metric Retention
+    Configure in VictoriaMetrics:
+    ```yaml
+    retentionPeriod: 30d  # Keep 30 days
+    -retentionPeriod=30d  # CLI flag for single
+    ```
+    
+    ### Downsampling
+    For long-term storage:
+    ```yaml
+    downsampling:
+      enabled: true
+      interval: 1h  # Downsample to 1h intervals after 7 days
+    ```
+    
+    ## Alert Configuration
+    
+    ### Using VMAlert
+    1. Copy rules from `nats-vmalert-rules.yaml`
+    2. Add to VMAlert configuration
+    3. Configure notification channels
+    
+    ### Alert Thresholds
+    - **Warning**: Backpressure > 80% for 5 minutes
+    - **Critical**: Backpressure > 90% for 5 minutes
+    - **Critical**: Server down for 1 minute
+    
+    ## Grafana Dashboard
+    
+    Import the VictoriaMetrics dashboard:
+    1. Use JSON from `grafana-dashboard-vm.json`
+    2. Set datasource to VictoriaMetrics
+    3. Configure variables:
+       - `$datasource`: VictoriaMetrics
+       - `$cluster`: Your cluster name
+       - `$stream`: DOCUMENTS|EXECUTION|OBSERVABILITY

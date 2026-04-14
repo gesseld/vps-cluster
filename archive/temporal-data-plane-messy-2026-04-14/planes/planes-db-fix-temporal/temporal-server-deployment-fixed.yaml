@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-server
+  namespace: data-plane
+  labels:
+    app: temporal-server
+    plane: data
+    tenant: temporal-tenant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-server
+  template:
+    metadata:
+      labels:
+        app: temporal-server
+        plane: data
+        tenant: temporal-tenant
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: temporal
+        image: temporalio/server:1.30.4
+        # Use environment variables as shown in the startup script
+        env:
+        - name: SERVICES
+          value: "frontend"
+        - name: SQL_HOST
+          value: "postgresql-primary"
+        - name: SQL_PORT
+          value: "5432"
+        - name: SQL_DATABASE
+          value: "temporal"
+        - name: SQL_USER
+          value: "temporal"
+        - name: SQL_PASSWORD
+          value: "temporal"
+        - name: SQL_PLUGIN_NAME
+          value: "postgres12"
+        - name: VISIBILITY_SQL_HOST
+          value: "postgresql-primary"
+        - name: VISIBILITY_SQL_PORT
+          value: "5432"
+        - name: VISIBILITY_SQL_DATABASE
+          value: "temporal_visibility"
+        - name: VISIBILITY_SQL_USER
+          value: "temporal"
+        - name: VISIBILITY_SQL_PASSWORD
+          value: "temporal"
+        - name: VISIBILITY_SQL_PLUGIN_NAME
+          value: "postgres12"
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 200m
+            memory: 512Mi
+        ports:
+        - containerPort: 7233
+          name: frontend
+        - containerPort: 7234
+          name: history
+        - containerPort: 7235
+          name: matching
+        - containerPort: 7239
+          name: worker
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-server
+  namespace: data-plane
+  labels:
+    app: temporal-server
+    plane: data
+spec:
+  ports:
+  - port: 7233
+    targetPort: 7233
+    name: frontend
+  selector:
+    app: temporal-server

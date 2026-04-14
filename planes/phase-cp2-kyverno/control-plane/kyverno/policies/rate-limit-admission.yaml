@@ -1,0 +1,135 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: rate-limit-admission
+  annotations:
+    policies.kyverno.io/title: Rate Limit Admission
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: RateLimit
+    policies.kyverno.io/description: >-
+      Limits pod creation bursts per namespace to prevent ArgoCD sync storms
+      and resource exhaustion. Allows 5 pods per minute per namespace.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: rate-limit-pod-creation
+    match:
+      resources:
+        kinds:
+        - Pod
+        operations:
+        - CREATE
+    context:
+    - name: podCount
+      apiCall:
+        urlPath: "/api/v1/namespaces/{{ request.namespace }}/pods"
+        jmesPath: "items[?status.phase!='Failed' && status.phase!='Succeeded'].metadata.name | length(@)"
+    preconditions:
+      all:
+      - key: "{{ podCount }}"
+        operator: GreaterThanOrEquals
+        value: 0
+    validate:
+      message: "Rate limit exceeded: Cannot create more than 10 pods total in namespace '{{ request.namespace }}'. Current: {{ podCount }} pods."
+      deny:
+        conditions:
+          all:
+          - key: "{{ podCount }}"
+            operator: GreaterThanOrEquals
+            value: 10
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-rate-limit
+  annotations:
+    policies.kyverno.io/title: Tenant Rate Limit
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: RateLimit
+    policies.kyverno.io/description: >-
+      Limits resource creation per tenant label to prevent single tenant
+      from overwhelming cluster resources.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: limit-pods-per-tenant
+    match:
+      resources:
+        kinds:
+        - Pod
+        operations:
+        - CREATE
+    context:
+    - name: tenantPods
+      apiCall:
+        urlPath: "/api/v1/pods"
+        jmesPath: "items[?metadata.labels.tenant == '{{ request.object.metadata.labels.tenant }}' && status.phase!='Failed' && status.phase!='Succeeded'].metadata.name | length(@)"
+    preconditions:
+      all:
+      - key: "{{ request.object.metadata.labels.tenant }}"
+        operator: NotEquals
+        value: ""
+      - key: "{{ tenantPods }}"
+        operator: GreaterThanOrEquals
+        value: 0
+    validate:
+      message: "Tenant '{{ request.object.metadata.labels.tenant }}' rate limit exceeded: Max 50 pods total."
+      deny:
+        conditions:
+          all:
+          - key: "{{ tenantPods }}"
+            operator: GreaterThanOrEquals
+            value: 50
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: argocd-sync-protection
+  annotations:
+    policies.kyverno.io/title: ArgoCD Sync Protection
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: RateLimit
+    policies.kyverno.io/description: >-
+      Special protection for ArgoCD namespaces to prevent sync storms.
+      Limits pod creation bursts in argocd namespace.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: limit-argocd-sync
+    match:
+      resources:
+        kinds:
+        - Pod
+        operations:
+        - CREATE
+        namespaces:
+        - argocd
+    context:
+    - name: argocdPodCount
+      apiCall:
+        urlPath: "/api/v1/namespaces/argocd/pods"
+        jmesPath: "items[?status.phase!='Failed' && status.phase!='Succeeded'].metadata.name | length(@)"
+    validate:
+      message: "ArgoCD sync protection: Cannot create more than 20 pods total in argocd namespace."
+      deny:
+        conditions:
+          all:
+          - key: "{{ argocdPodCount }}"
+            operator: GreaterThanOrEquals
+            value: 20

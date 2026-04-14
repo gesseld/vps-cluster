@@ -1,0 +1,152 @@
+# Pod Disruption Budget for NATS JetStream
+# Simplified version with minAvailable: 1 for single replica deployment
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nats-pdb
+  namespace: data-plane
+  labels:
+    app: nats
+    component: pod-disruption-budget
+spec:
+  # For single replica deployment, maintain at least 1 pod available
+  # This prevents voluntary disruptions from evicting the only pod
+  minAvailable: 1
+  
+  # Select NATS server pods
+  selector:
+    matchLabels:
+      app: nats
+      component: server
+
+---
+# Pod Disruption Budget for NATS exporter
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nats-exporter-pdb
+  namespace: data-plane
+  labels:
+    app: nats
+    component: exporter-pod-disruption-budget
+spec:
+  # Exporter can tolerate disruptions
+  maxUnavailable: 1
+  
+  selector:
+    matchLabels:
+      app: nats
+      component: exporter
+
+---
+# Documentation for PDB configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-pdb-documentation
+  namespace: data-plane
+  labels:
+    app: nats
+    component: documentation
+data:
+  README.md: |
+    # NATS Pod Disruption Budget Configuration
+    
+    ## Overview
+    
+    Pod Disruption Budgets (PDBs) limit the number of pods of a replicated
+    application that are down simultaneously from voluntary disruptions.
+    
+    ## Current Configuration
+    
+    ### NATS Server PDB
+    - **Name**: nats-pdb
+    - **Strategy**: minAvailable: 1
+    - **Effect**: Prevents voluntary disruptions from evicting the NATS server pod
+    - **Rationale**: Since we're running a single replica, we want to ensure
+      the NATS server remains available during maintenance operations
+    
+    ### NATS Exporter PDB
+    - **Name**: nats-exporter-pdb
+    - **Strategy**: maxUnavailable: 1
+    - **Effect**: Allows the exporter pod to be disrupted
+    - **Rationale**: Metrics collection can tolerate brief interruptions
+    
+    ## Usage Examples
+    
+    ### Check PDB Status
+    ```bash
+    kubectl get pdb -n default -l app=nats
+    ```
+    
+    ### Describe PDB
+    ```bash
+    kubectl describe pdb nats-pdb -n default
+    ```
+    
+    ### Test Disruption
+    ```bash
+    # Try to drain a node (will be blocked by PDB if it would violate minAvailable)
+    kubectl drain <node-name> --ignore-daemonsets
+    ```
+    
+    ## Scaling Considerations
+    
+    If you scale NATS to multiple replicas in the future:
+    
+    1. **For 3 replicas (HA cluster)**:
+       ```yaml
+       minAvailable: 2  # Maintain quorum
+       ```
+    
+    2. **For 2 replicas**:
+       ```yaml
+       minAvailable: 1  # Maintain at least one pod
+       ```
+    
+    ## Voluntary vs Involuntary Disruptions
+    
+    PDBs only protect against **voluntary disruptions**:
+    - Node drain commands (`kubectl drain`)
+    - Pod eviction via API
+    - Rolling updates
+    
+    PDBs do NOT protect against **involuntary disruptions**:
+    - Node hardware failure
+    - Kernel panic
+    - Cloud provider deleting VM
+    
+    ## Best Practices
+    
+    1. **Always set PDBs for stateful applications** like NATS with JetStream
+    2. **Set appropriate minAvailable/maxUnavailable values** based on:
+       - Number of replicas
+       - Application criticality
+       - Recovery time objectives
+    3. **Test PDB behavior** before production deployments
+    4. **Monitor PDB violations** in your observability stack
+    
+    ## Troubleshooting
+    
+    ### PDB Preventing Node Drain
+    If `kubectl drain` is blocked by PDB:
+    ```bash
+    # Temporarily delete PDB (use with caution)
+    kubectl delete pdb nats-pdb -n default
+    
+    # Perform maintenance
+    
+    # Restore PDB
+    kubectl apply -f data-plane/nats/pdb.yaml
+    ```
+    
+    ### Checking Allowed Disruptions
+    ```bash
+    kubectl get pdb nats-pdb -n default -o jsonpath='{.status.disruptionsAllowed}'
+    ```
+    
+    ## References
+    
+    - [Kubernetes PDB Documentation](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)
+    - [PDB Best Practices](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)

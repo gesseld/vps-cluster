@@ -1,0 +1,52 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: security-plane-appset
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/argoproj/argocd-example-apps.git
+        revision: main
+        directories:
+          - path: security/*
+    
+  template:
+    metadata:
+      name: '{{path.basename}}'
+      namespace: argocd
+      labels:
+        plane: security
+        app.kubernetes.io/part-of: security-plane
+        argocd.argoproj.io/instance: security-plane
+    
+    spec:
+      project: default
+      
+      source:
+        repoURL: https://github.com/argoproj/argocd-example-apps.git
+        targetRevision: main
+        path: '{{path}}'
+      
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{path.basename}}'
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        
+        syncOptions:
+          - CreateNamespace=true
+          - PruneLast=true
+          - RespectIgnoreDifferences=true
+          - Validate=true  # Extra validation for security components
+        
+        retry:
+          limit: 2  # Lower retry for security (fail fast)
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 30s

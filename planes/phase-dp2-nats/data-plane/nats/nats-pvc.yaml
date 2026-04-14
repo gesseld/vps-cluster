@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nats-jetstream-pvc
+  namespace: data-plane
+  labels:
+    app: nats
+    component: jetstream-storage
+spec:
+  storageClassName: hcloud-volumes
+  volumeName: volume-oNmhESB6bgWXBdNorJ6p0iCW8ZoTz0eFkjxnz85N1bGgApJapD5Eip4L0GdlTT5V
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi

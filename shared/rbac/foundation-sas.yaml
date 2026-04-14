@@ -1,0 +1,99 @@
+# Foundation Service Accounts for SF-2 task
+# Creates least-privilege service accounts before workloads reference them
+# Control-plane: temporal-server, kyverno, spire-server
+# Data-plane: postgres, nats, minio
+# Observability-plane: vmagent, fluent-bit, loki
+
+---
+# Control-plane service accounts
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: temporal-server
+  namespace: control-plane
+  labels:
+    plane: control
+    component: workflow
+    rbac-tier: foundation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kyverno
+  namespace: control-plane
+  labels:
+    plane: control
+    component: policy
+    rbac-tier: foundation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-server
+  namespace: control-plane
+  labels:
+    plane: control
+    component: identity
+    rbac-tier: foundation
+---
+# Data-plane service accounts
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres
+  namespace: data-plane
+  labels:
+    plane: data
+    component: database
+    rbac-tier: foundation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nats
+  namespace: data-plane
+  labels:
+    plane: data
+    component: messaging
+    rbac-tier: foundation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: minio
+  namespace: data-plane
+  labels:
+    plane: data
+    component: storage
+    rbac-tier: foundation
+---
+# Observability-plane service accounts
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vmagent
+  namespace: observability-plane
+  labels:
+    plane: observability
+    component: metrics
+    rbac-tier: foundation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit
+  namespace: observability-plane
+  labels:
+    plane: observability
+    component: logging
+    rbac-tier: foundation
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loki
+  namespace: observability-plane
+  labels:
+    plane: observability
+    component: log-storage
+    rbac-tier: foundation

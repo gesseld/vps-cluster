@@ -1,0 +1,22 @@
+# Test Pod for nvme-waitfirst StorageClass
+# Purpose: Trigger PVC binding with WaitForFirstConsumer
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-waitfirst
+  labels:
+    test: storageclass-waitfirst
+    purpose: validation
+spec:
+  containers:
+  - name: test-container
+    image: busybox:latest
+    command: ["sh", "-c", "echo 'PVC successfully bound with WaitForFirstConsumer' && sleep 3600"]
+    volumeMounts:
+    - name: test-volume
+      mountPath: /data
+  volumes:
+  - name: test-volume
+    persistentVolumeClaim:
+      claimName: test-pvc-waitfirst
+  restartPolicy: Never

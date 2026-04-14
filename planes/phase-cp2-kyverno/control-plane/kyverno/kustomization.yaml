@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kyverno
+
+resources:
+  # Kyverno installation (patched for HA)
+  - https://github.com/kyverno/kyverno/releases/download/v1.11.0/install.yaml
+  
+  # Custom policies
+  - policies/require-labels.yaml
+  - policies/resource-constraints.yaml
+  - policies/security-baseline.yaml
+  - policies/rate-limit-admission.yaml
+  
+  # Metrics service
+  - metrics-service.yaml
+
+patchesStrategicMerge:
+  # Patch for HA configuration (2 replicas)
+  - patch-ha.yaml
+
+images:
+  - name: ghcr.io/kyverno/kyverno
+    newTag: v1.11.0
+  - name: ghcr.io/kyverno/kyvernopre
+    newTag: v1.11.0
+
+configMapGenerator:
+  - name: kyverno-config
+    behavior: merge
+    literals:
+      - resourceFilters="[*,kyverno,*][Event,*,*][*,kube-system,*][*,kube-public,*][*,kube-node-lease,*][Node,*,*][APIService,*,*][TokenReview,*,*][SubjectAccessReview,*,*][*,kyverno,*][ClusterRoleBinding,*,*][ClusterRole,*,*][RoleBinding,*,*][Role,*,*]"
+      - enableMetrics=true
+      - metricsPort=8000
+      - metricsAddress=0.0.0.0
+
+vars:
+  - name: KYVERNO_REPLICAS
+    objref:
+      kind: Deployment
+      name: kyverno
+      apiVersion: apps/v1
+    fieldref:
+      fieldpath: spec.replicas

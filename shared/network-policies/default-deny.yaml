@@ -1,0 +1,14 @@
+# Default Deny NetworkPolicy for Zero-Trust Boundary
+# Applied to all foundation namespaces
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{NAMESPACE}}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress: []
+  egress: []

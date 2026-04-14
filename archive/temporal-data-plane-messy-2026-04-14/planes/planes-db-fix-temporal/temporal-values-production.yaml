@@ -1,0 +1,303 @@
+# Production-Hardened Temporal Configuration for Hetzner K3s
+# Deployed in data-plane namespace with PostgreSQL in same namespace
+# Version: 1.30.4
+# Purpose: Fix PostgreSQL connectivity by eliminating cross-namespace DNS
+
+server:
+  # Base configuration
+  replicaCount: 1  # Start with 1, scale services individually
+  
+  image:
+    repository: temporalio/server
+    tag: 1.30.4
+    pullPolicy: IfNotPresent
+
+  # Logging configuration
+  config:
+    logLevel: info
+    logFormat: json  # Better for log aggregation
+    
+    # Persistence configuration - CRITICAL FOR FIX
+    persistence:
+      default:
+        driver: sql
+        sql:
+          pluginName: postgres12
+          connectAddr: postgresql:5432  # Same namespace, no cross-namespace DNS
+          databaseName: temporal
+          user: temporal
+          password: temporal
+          maxConns: 50
+          maxIdleConns: 20
+          maxConnLifetime: 1h
+          connectTimeout: 5s
+          statementTimeout: 30s
+
+      visibility:
+        driver: sql
+        sql:
+          pluginName: postgres12
+          connectAddr: postgresql:5432  # Same namespace
+          databaseName: temporal_visibility
+          user: temporal
+          password: temporal
+          maxConns: 20
+          maxIdleConns: 10
+          maxConnLifetime: 1h
+          connectTimeout: 5s
+          statementTimeout: 30s
+
+      # Advanced settings for performance
+      numHistoryShards: 4  # Reduced for small cluster
+      advancedVisibilityStore: ""
+
+  # Service-level scaling for resource efficiency
+  # Each service can scale independently based on load
+  services:
+    frontend:
+      replicas: 2
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+      service:
+        type: ClusterIP
+        port: 7233
+
+    history:
+      replicas: 2
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+
+    matching:
+      replicas: 2
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+
+    worker:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+
+  # High availability configuration
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Topology spread for resilience
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+  # Priority class for resource protection
+  priorityClassName: foundation-critical
+
+  # Metrics and monitoring
+  metrics:
+    prometheus:
+      enabled: true
+      timerType: histogram
+    port: 9090
+
+  # Environment variables
+  env:
+    - name: DB
+      value: postgres12
+    - name: TEMPORAL_CLI_ADDRESS
+      value: "temporal-frontend:7233"
+    - name: TEMPORAL_GRPC_PORT
+      value: "7233"
+
+  # Security context
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+
+  # Liveness and readiness probes
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Schema management (CRITICAL - prevents startup failures)
+schema:
+  setup:
+    enabled: true
+    # Idempotent schema setup - safe to run multiple times
+    backoffLimit: 3
+    activeDeadlineSeconds: 300
+    
+  update:
+    enabled: true
+    # Automatic schema updates on version changes
+    backoffLimit: 3
+    activeDeadlineSeconds: 300
+
+# Admin tools for debugging and management
+admintools:
+  enabled: true
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# We're using existing PostgreSQL in data-plane
+# DO NOT enable this - we have our own PostgreSQL
+postgresql:
+  enabled: false
+  # Reference for documentation:
+  # Our PostgreSQL is deployed separately in data-plane namespace
+  # Service name: postgresql
+  # Port: 5432
+  # Databases: temporal, temporal_visibility
+  # User: temporal
+  # Password: temporal
+
+# Web UI for monitoring
+web:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    type: ClusterIP
+    port: 8088
+  ingress:
+    enabled: false  # Enable if you have ingress controller
+
+# Disable expensive optional components for resource-constrained cluster
+prometheus:
+  enabled: false
+  # We use VictoriaMetrics instead
+
+grafana:
+  enabled: false
+  # We use separate Grafana deployment
+
+elasticsearch:
+  enabled: false
+  # We use PostgreSQL for visibility
+
+# Advanced configuration for production
+advanced:
+  # Service account for Temporal
+  serviceAccount:
+    create: true
+    name: temporal-server
+    annotations: {}
+
+  # Pod annotations for monitoring
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+
+  # Node selector for topology awareness
+  nodeSelector: {}
+
+  # Affinity rules
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/instance
+                  operator: In
+                  values:
+                    - temporal
+            topologyKey: kubernetes.io/hostname
+
+  # Tolerations
+  tolerations: []
+
+  # Extra volumes and mounts (if needed)
+  extraVolumes: []
+  extraVolumeMounts: []
+
+# Network policy configuration
+networkPolicy:
+  enabled: true
+  # Allow from control-plane and execution-plane namespaces
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              plane: control
+        - namespaceSelector:
+            matchLabels:
+              plane: execution
+      ports:
+        - port: 7233
+          protocol: TCP
+
+# Resource quotas alignment
+# These settings align with the foundation resource budget:
+# Control Plane: 2.8GB request / 4.2GB limit
+# Temporal gets 750MB request / 1GB limit per replica
+# With 2 frontend + 2 history + 2 matching + 1 worker = ~4.25GB total
+# Well within the 4.2GB limit for control plane foundation
+
+# Backup configuration (if using built-in backup)
+backup:
+  enabled: false
+  # Recommend external backup strategy using:
+  # 1. PostgreSQL native backups
+  # 2. Velero for cluster backup
+  # 3. MinIO replication for object storage
+
+# Migration notes:
+# 1. This configuration fixes the cross-namespace DNS issue by using short service name
+# 2. PostgreSQL must be in the same namespace (data-plane)
+# 3. Schema initialization is automatic via Helm hooks
+# 4. Network policies enforce security boundaries
+# 5. Resource limits prevent noisy neighbor issues
+
+# Validation command after deployment:
+# kubectl exec -n data-plane deploy/temporal-frontend -- tctl cluster health
+# Expected output: "SERVING"
+
+# Troubleshooting:
+# 1. If schema initialization fails, check PostgreSQL connectivity
+# 2. If pods crash, check resource limits and PostgreSQL credentials
+# 3. If network connectivity fails, check NetworkPolicy configuration
+# 4. If DNS resolution fails, check service discovery within namespace

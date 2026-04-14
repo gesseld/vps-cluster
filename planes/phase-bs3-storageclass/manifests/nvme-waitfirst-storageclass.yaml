@@ -1,0 +1,26 @@
+# BS-3: StorageClass with WaitForFirstConsumer
+# Purpose: Delay PVC binding until pod scheduling to ensure node has NVMe storage
+# Compatible with: csi.hetzner.cloud
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-waitfirst
+  labels:
+    storage-type: nvme-optimized
+    binding-mode: wait-for-first-consumer
+    provisioner: csi.hetzner.cloud
+  annotations:
+    description: "StorageClass with WaitForFirstConsumer binding mode for NVMe-optimized workloads"
+    documentation: "https://kubernetes.io/docs/concepts/storage/storage-classes/#volume-binding-mode"
+provisioner: csi.hetzner.cloud
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+parameters:
+  # CSI driver specific parameters
+  csi.storage.k8s.io/fstype: ext4
+  # Add any driver-specific parameters here
+  # For Rancher CSI: (none required)
+  # For Hetzner CSI: type: premium-nvme
+  # For Longhorn: numberOfReplicas: "3"
+  type: premium-nvme

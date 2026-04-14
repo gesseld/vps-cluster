@@ -1,0 +1,216 @@
+# NATS JetStream Helm Values
+# Production configuration with proper resource allocations
+
+global:
+  # Enable JetStream for persistence
+  jetstream:
+    enabled: true
+    fileStorage:
+      enabled: true
+      storageDirectory: /data/jetstream
+      storageSize: 15Gi  # 12-15Gi per PVC as recommended
+      # Use WaitForFirstConsumer for better topology scheduling
+      storageClassName: ""
+      volumeBindingMode: WaitForFirstConsumer
+  
+  # TLS configuration for client connections
+  tls:
+    enabled: true
+    # Use self-signed certificates for development
+    # In production, use cert-manager or provide your own certificates
+    secret:
+      name: nats-tls
+      # cert: ""
+      # key: ""
+      # ca: ""
+
+# NATS server configuration
+nats:
+  image: nats:2.10-alpine
+  pullPolicy: IfNotPresent
+  
+  # Single replica (simplified deployment)
+  replicaCount: 1
+  
+  # Client port configuration
+  client:
+    enabled: true
+    port: 4222
+    # Enable TLS on client port
+    tls:
+      enabled: true
+      secret:
+        name: nats-tls
+  
+  # Cluster port configuration (disabled for single replica)
+  cluster:
+    enabled: false
+    port: 6222
+  
+  # Monitoring port
+  monitor:
+    enabled: true
+    port: 8222
+  
+  # JetStream configuration with proper memory/file store tuning
+  jetstream:
+    enabled: true
+    # Memory limit for JetStream - keep well under 256Mi limit
+    maxMemory: 128M
+    # File storage limit - matches PVC size
+    maxFile: 14G  # 15Gi PVC - 1Gi overhead
+  
+  # Authentication (disabled for simplicity)
+  # In production, enable authentication
+  auth:
+    enabled: false
+  
+  # Resource limits - production recommendations
+  resources:
+    requests:
+      memory: "170Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"  # Increased to handle TLS + JetStream replication overhead
+  
+  # Liveness and readiness probes
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  # Pod security context
+  securityContext:
+    enabled: true
+    fsGroup: 1000
+    runAsUser: 1000
+    runAsGroup: 1000
+  
+  # Topology spread constraints (for future HA deployment)
+  # Currently commented out as we're using single replica
+  # topologySpreadConstraints:
+  #   - maxSkew: 0
+  #     topologyKey: kubernetes.io/hostname
+  #     whenUnsatisfiable: DoNotSchedule
+  #     labelSelector:
+  #       matchLabels:
+  #         app: nats
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    annotations: {}
+    # LoadBalancer configuration if needed
+    # type: LoadBalancer
+    # loadBalancerIP: ""
+    # loadBalancerSourceRanges: []
+  
+  # Node selector (optional)
+  nodeSelector: {}
+  
+  # Tolerations (optional)
+  tolerations: []
+  
+  # Affinity (optional)
+  affinity: {}
+  
+  # Extra environment variables
+  extraEnv: []
+  
+  # Extra volumes
+  extraVolumes: []
+  
+  # Extra volume mounts
+  extraVolumeMounts: []
+
+# NATS Box (management tool)
+natsbox:
+  enabled: true
+  image: natsio/nats-box:latest
+  pullPolicy: IfNotPresent
+
+# NATS Account Server (optional)
+accountserver:
+  enabled: false
+
+# Prometheus exporter for metrics with proper resource allocation
+exporter:
+  enabled: true
+  image: natsio/prometheus-nats-exporter:latest
+  pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+  
+  # Service monitor for Prometheus
+  serviceMonitor:
+    enabled: false
+    # Set to true if you have Prometheus Operator installed
+
+# Reloader for configuration updates
+reloader:
+  enabled: false
+
+# Configuration for streams (will be applied via ConfigMap)
+config:
+  # Initial streams configuration
+  # This will be overridden by stream-config.yaml
+  streams: {}
+  
+  # Server configuration file with production settings
+  serverConfig: |
+    # NATS Server Configuration
+    jetstream {
+      store_dir: "/data/jetstream"
+      max_memory_store: 134217728  # 128Mi - keep well under 256Mi limit
+      max_file_store: 15032385536  # 14Gi - 15Gi PVC with 1Gi overhead
+    }
+    
+    # Monitoring
+    http: 8222
+    
+    # TLS configuration
+    tls {
+      cert_file: "/etc/nats/tls/tls.crt"
+      key_file: "/etc/nats/tls/tls.key"
+      ca_file: "/etc/nats/tls/ca.crt"
+    }
+    
+    # Authorization (disabled for development)
+    authorization {
+      users = []
+    }
+    
+    # Logging configuration
+    logging {
+      time: true
+      debug: false
+      trace: false
+      colors: true
+      pid: true
+    }
+    
+    # Cluster configuration (commented out for single replica)
+    # cluster {
+    #   name: "nats-cluster"
+    #   port: 6222
+    #   routes: [
+    #     nats://nats-0.nats-headless.default.svc.cluster.local:6222
+    #     nats://nats-1.nats-headless.default.svc.cluster.local:6222
+    #     nats://nats-2.nats-headless.default.svc.cluster.local:6222
+    #   ]
+    # }

@@ -1,0 +1,66 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-plane-labels
+  annotations:
+    policies.kyverno.io/title: Require Plane Labels
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Label
+    policies.kyverno.io/description: >-
+      Enforces that all pods have a `plane` label with valid values:
+      control, data, observability, execution, or ai.
+      This enables proper plane isolation and network policy enforcement.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: require-plane-label
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "All pods must have a `plane` label with value in {control, data, observability, execution, ai}"
+      pattern:
+        metadata:
+          labels:
+            plane: "control | data | observability | execution | ai"
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-tenant-labels
+  annotations:
+    policies.kyverno.io/title: Require Tenant Labels
+    policies.kyverno.io/category: Multi-Tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Label
+    policies.kyverno.io/description: >-
+      Enforces that all pods have a `tenant` label for Rate Limiting Service (RLS).
+      This enables tenant-based resource isolation and quota enforcement.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: require-tenant-label
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "All pods must have a `tenant` label for RLS (Rate Limiting Service)"
+      pattern:
+        metadata:
+          labels:
+            tenant: "?*"
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno

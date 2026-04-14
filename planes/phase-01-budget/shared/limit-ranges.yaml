@@ -1,0 +1,69 @@
+# LimitRanges for foundation namespaces
+# Injects default requests/limits for containers without explicit specs per BS-2 task
+
+---
+# Control Plane Namespace LimitRange
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: control-plane-defaults
+  namespace: control-plane
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      memory: "256Mi"
+      cpu: "100m"
+    default:
+      memory: "512Mi"
+      cpu: "250m"
+    max:
+      memory: "1Gi"
+      cpu: "1"
+    min:
+      memory: "64Mi"
+      cpu: "10m"
+---
+# Data Plane Namespace LimitRange
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: data-plane-defaults
+  namespace: data-plane
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      memory: "512Mi"
+      cpu: "200m"
+    default:
+      memory: "1Gi"
+      cpu: "500m"
+    max:
+      memory: "2Gi"
+      cpu: "2"
+    min:
+      memory: "128Mi"
+      cpu: "50m"
+---
+# Observability Plane Namespace LimitRange
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: observability-plane-defaults
+  namespace: observability-plane
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      memory: "128Mi"
+      cpu: "50m"
+    default:
+      memory: "256Mi"
+      cpu: "100m"
+    max:
+      memory: "512Mi"
+      cpu: "1"
+    min:
+      memory: "32Mi"
+      cpu: "10m"

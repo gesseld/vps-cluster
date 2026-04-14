@@ -1,0 +1,257 @@
+# Network Policy for NATS JetStream
+# Allows access from execution, control, and observability namespaces
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-allow-execution-control-observability
+  namespace: data-plane
+  labels:
+    app: nats
+    component: network-policy
+spec:
+  # Apply to NATS pods
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  
+  # Policy types
+  policyTypes:
+    - Ingress
+  
+  # Ingress rules
+  ingress:
+    # Allow from execution namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: execution
+      ports:
+        - protocol: TCP
+          port: 4222  # Client port
+        - protocol: TCP
+          port: 8222  # Monitoring port
+    
+    # Allow from control namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: control
+      ports:
+        - protocol: TCP
+          port: 4222  # Client port
+        - protocol: TCP
+          port: 8222  # Monitoring port
+    
+    # Allow from observability namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 4222  # Client port
+        - protocol: TCP
+          port: 8222  # Monitoring port
+    
+    # Allow from same namespace (for internal communication)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - protocol: TCP
+          port: 4222  # Client port
+        - protocol: TCP
+          port: 8222  # Monitoring port
+    
+    # Allow from nats-box for management
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: nats-box
+              app.kubernetes.io/name: nats
+      ports:
+        - protocol: TCP
+          port: 4222  # Client port
+        - protocol: TCP
+          port: 8222  # Monitoring port
+    
+    # Allow from kube-system for monitoring (optional)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              k8s-app: prometheus
+      ports:
+        - protocol: TCP
+          port: 8222  # Monitoring port
+
+---
+# Network Policy for NATS monitoring exporter
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-exporter-allow-monitoring
+  namespace: data-plane
+  labels:
+    app: nats
+    component: exporter-network-policy
+spec:
+  # Apply to NATS exporter pods
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+      component: exporter
+  
+  policyTypes:
+    - Ingress
+  
+  ingress:
+    # Allow from all namespaces for monitoring
+    - from:
+        - namespaceSelector: {}  # All namespaces
+      ports:
+        - protocol: TCP
+          port: 7777  # Prometheus exporter port
+
+---
+# Network Policy for NATS management (nats-box)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-box-allow-management
+  namespace: data-plane
+  labels:
+    app: nats
+    component: management-network-policy
+spec:
+  # Apply to nats-box pods
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+      app.kubernetes.io/component: nats-box
+  
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # Allow from control namespace for management
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: control
+      ports:
+        - protocol: TCP
+          port: 4222  # NATS client port
+  
+  egress:
+    # Allow nats-box to connect to NATS server
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - protocol: TCP
+          port: 4222
+        - protocol: TCP
+          port: 8222
+    
+    # Allow DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+
+---
+# Default deny all other ingress traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats-deny-all-other
+  namespace: data-plane
+  labels:
+    app: nats
+    component: default-deny
+spec:
+  # Apply to all NATS pods
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  
+  policyTypes:
+    - Ingress
+  
+  # No ingress rules = deny all other traffic
+  ingress: []
+
+---
+# Label namespaces for network policy matching
+# This ConfigMap documents the required namespace labels
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-network-policy-labels
+  namespace: data-plane
+  labels:
+    app: nats
+    component: documentation
+data:
+  README.md: |
+    # NATS Network Policy Namespace Labels
+    
+    For the NATS network policies to work correctly, the following namespaces
+    must be labeled with the specified labels:
+    
+    ## Required Namespace Labels
+    
+    1. **execution namespace** (for task execution services):
+       ```bash
+       kubectl label namespace <execution-namespace> kubernetes.io/metadata.name=execution
+       ```
+    
+    2. **control namespace** (for control plane services):
+       ```bash
+       kubectl label namespace <control-namespace> kubernetes.io/metadata.name=control
+       ```
+    
+    3. **observability namespace** (for monitoring services):
+       ```bash
+       kubectl label namespace <observability-namespace> kubernetes.io/metadata.name=observability
+       ```
+    
+    ## Creating Namespaces (if they don't exist)
+    
+    ```bash
+    # Create namespaces
+    kubectl create namespace execution
+    kubectl create namespace control
+    kubectl create namespace observability
+    
+    # Label namespaces
+    kubectl label namespace execution kubernetes.io/metadata.name=execution
+    kubectl label namespace control kubernetes.io/metadata.name=control
+    kubectl label namespace observability kubernetes.io/metadata.name=observability
+    ```
+    
+    ## Verification
+    
+    Verify namespace labels:
+    ```bash
+    kubectl get namespaces --show-labels | grep -E "execution|control|observability"
+    ```
+    
+    ## Notes
+    
+    - If you're using different namespace names, update the network policies accordingly
+    - The `kubernetes.io/metadata.name` label is used by the Kubernetes metadata service
+    - You can use custom labels by modifying the network policy selectors

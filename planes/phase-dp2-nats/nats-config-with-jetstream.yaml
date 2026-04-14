@@ -1,0 +1,28 @@
+apiVersion: v1
+data:
+  nats.conf: |
+    {
+      "http_port": 8222,
+      "lame_duck_duration": "30s",
+      "lame_duck_grace_period": "10s",
+      "pid_file": "/var/run/nats/nats.pid",
+      "port": 4222,
+      "server_name": $SERVER_NAME
+    }
+kind: ConfigMap
+metadata:
+  annotations:
+    meta.helm.sh/release-name: nats
+    meta.helm.sh/release-namespace: data-plane
+  creationTimestamp: "2026-04-11T23:18:18Z"
+  labels:
+    app.kubernetes.io/component: nats
+    app.kubernetes.io/instance: nats
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/version: 2.12.6
+    helm.sh/chart: nats-2.12.6
+  name: nats-config
+  namespace: data-plane
+  resourceVersion: "1246940"
+  uid: 5365e2d8-bf01-495f-9bd0-58a2e8523627

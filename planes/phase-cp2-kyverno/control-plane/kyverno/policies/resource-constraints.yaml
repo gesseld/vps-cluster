@@ -1,0 +1,98 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Resource
+    policies.kyverno.io/description: >-
+      Enforces that all containers have resource requests and limits defined.
+      Prevents resource exhaustion and enables proper scheduling.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+  - name: require-resource-limits
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "All containers must have resource requests and limits defined"
+      pattern:
+        spec:
+          containers:
+          - name: "*"
+            resources:
+              requests:
+                memory: "?*"
+                cpu: "?*"
+              limits:
+                memory: "?*"
+                cpu: "?*"
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: enforce-resource-ratios
+  annotations:
+    policies.kyverno.io/title: Enforce Resource Ratios
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Resource
+    policies.kyverno.io/description: >-
+      Enforces sane resource ratios (limits should not exceed 2x requests).
+      Prevents resource overcommitment and ensures predictable performance.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: enforce-cpu-ratio
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "CPU limits should not exceed 2x CPU requests (enforced in audit mode)"
+      pattern:
+        spec:
+          containers:
+          - name: "*"
+            resources:
+              limits:
+                cpu: "?*"
+              requests:
+                cpu: "?*"
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno
+  - name: enforce-memory-ratio
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "Memory limits should not exceed 2x memory requests (enforced in audit mode)"
+      pattern:
+        spec:
+          containers:
+          - name: "*"
+            resources:
+              limits:
+                memory: "?*"
+              requests:
+                memory: "?*"
+    exclude:
+      resources:
+        namespaces:
+        - kube-system
+        - kyverno

@@ -1,0 +1,30 @@
+# Foundation namespaces for BS-2 task
+# Creates control-plane, data-plane, and observability-plane namespaces
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: control-plane
+  labels:
+    plane: foundation
+    tier: control
+    purpose: kubernetes-control-components
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data-plane
+  labels:
+    plane: foundation
+    tier: data
+    purpose: application-data-processing
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability-plane
+  labels:
+    plane: foundation
+    tier: observability
+    purpose: monitoring-logging-tracing

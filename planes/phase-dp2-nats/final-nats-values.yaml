@@ -1,0 +1,64 @@
+# NATS JetStream production configuration with TLS
+# Requires TLS secret nats-tls to be mounted
+
+nats:
+  image: nats:2.12.6-alpine
+  replicaCount: 1
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  
+  jetstream:
+    enabled: true
+    memStorage: 256M
+    fileStorage: 14G
+  
+  # TLS Configuration
+  tls:
+    enabled: true
+    secret:
+      name: nats-tls
+  
+  client:
+    enabled: true
+    port: 4222
+    tls:
+      enabled: true
+      secret:
+        name: nats-tls
+  
+  cluster:
+    enabled: false
+  
+  monitor:
+    enabled: true
+    port: 8222
+  
+  securityContext:
+    enabled: true
+    fsGroup: 1000
+    runAsUser: 1000
+    runAsGroup: 1000
+
+# Custom config with TLS enabled (must be applied via ConfigMap)
+config:
+  file:
+    enabled: false
+
+# Disable optional components
+natsbox:
+  enabled: true
+
+exporter:
+  enabled: false
+
+reloader:
+  enabled: false
+
+accountserver:
+  enabled: false

@@ -1,0 +1,165 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-replica
+  namespace: default
+  labels:
+    app: postgresql
+    role: replica
+spec:
+  serviceName: postgres-replica
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+      role: replica
+  template:
+    metadata:
+      labels:
+        app: postgresql
+        role: replica
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values:
+                - storage-heavy
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - postgresql
+                  - role
+                  operator: In
+                  values:
+                  - primary
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: clone-primary
+        image: postgres:15
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          until pg_basebackup -h postgres-primary -U replicator -D /var/lib/postgresql/data/pgdata -X stream -P; do
+            echo "Waiting for primary to be ready..."
+            sleep 5
+          done
+          echo "Base backup completed"
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-replication
+              key: password
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+      containers:
+      - name: postgres
+        image: postgres:15
+        env:
+        - name: POSTGRES_DB
+          value: app
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-app-user
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-app-user
+              key: password
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: PRIMARY_HOST
+          value: postgres-primary
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          # Configure replication
+          cat > /var/lib/postgresql/data/pgdata/recovery.conf <<EOR
+          standby_mode = 'on'
+          primary_conninfo = 'host=postgres-primary port=5432 user=replicator password=$(PGPASSWORD) application_name=replica1'
+          trigger_file = '/tmp/promote_to_primary'
+          recovery_target_timeline = 'latest'
+          EOR
+          
+          # Start PostgreSQL
+          exec docker-entrypoint.sh postgres
+        ports:
+        - containerPort: 5432
+          name: postgres
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - postgres
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - postgres
+          initialDelaySeconds: 30
+          periodSeconds: 5
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: postgres-init-scripts
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      storageClassName: hcloud-volumes
+
+      resources:
+        requests:
+          storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-replica
+  namespace: default
+  labels:
+    app: postgresql
+    role: replica
+spec:
+  selector:
+    app: postgresql
+    role: replica
+  ports:
+  - port: 5432
+    targetPort: postgres
+  type: ClusterIP

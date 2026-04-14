@@ -1,0 +1,100 @@
+# Temporal configuration
+# This is mounted to /etc/temporal/config/config.yaml
+
+# Database configuration
+db:
+  driver: "postgres"
+  host: "${POSTGRES_SEEDS:?required}"
+  port: 5432
+  user: "${POSTGRES_USER:?required}"
+  password: "${POSTGRES_PWD:?required}"
+  database: "temporal"
+  connectAttributes:
+    statement_cache_capacity: "100"
+    default_transaction_isolation: "'read committed'"
+  
+  visibility:
+    driver: "postgres"
+    host: "${POSTGRES_SEEDS:?required}"
+    port: 5432
+    user: "${POSTGRES_USER:?required}"
+    password: "${POSTGRES_PWD:?required}"
+    database: "temporal_visibility"
+    connectAttributes:
+      statement_cache_capacity: "100"
+      default_transaction_isolation: "'read committed'"
+
+# Public client configuration
+publicClient:
+  hostPort: "temporal.control-plane.svc.cluster.local:7233"
+
+# Frontend service configuration
+frontend:
+  bindOnLocalHost: false
+  bindOnIP: "0.0.0.0"
+  port: 7233
+  maxConcurrentLongPollRequests: 5000
+  rps: 10000
+
+# History service configuration
+history:
+  bindOnLocalHost: false
+  bindOnIP: "0.0.0.0"
+  port: 7234
+  numberOfShards: 512
+
+# Matching service configuration
+matching:
+  bindOnLocalHost: false
+  bindOnIP: "0.0.0.0"
+  port: 7235
+  maxTaskqueueActivitiesPerSecond: 100000
+
+# Internal services (for inter-service communication)
+internalFrontend:
+  bindOnLocalHost: false
+  bindOnIP: "0.0.0.0"
+  port: 7236
+
+internalHistory:
+  bindOnLocalHost: false
+  bindOnIP: "0.0.0.0"
+  port: 7237
+
+internalMatching:
+  bindOnLocalHost: false
+  bindOnIP: "0.0.0.0"
+  port: 7238
+
+# Metrics configuration
+metrics:
+  prometheus:
+    listenAddress: "0.0.0.0:9090"
+    handlerPath: "/metrics"
+
+# Logging configuration
+log:
+  stdout: true
+  level: "info"
+  format: "json"
+
+# Archival configuration (disabled)
+archival:
+  history:
+    state: "disabled"
+    enableRead: false
+  visibility:
+    state: "disabled"
+    enableRead: false
+
+# Namespace configuration
+namespace:
+  default:
+    retention: 72h
+
+# Cluster metadata
+clusterMetadata:
+  enableGlobalNamespace: false
+  failoverVersionIncrement: 10
+  masterClusterName: "active-active"
+  currentClusterName: "active-active"

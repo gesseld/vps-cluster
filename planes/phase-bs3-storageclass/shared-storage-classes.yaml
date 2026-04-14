@@ -1,0 +1,229 @@
+# BS-3: StorageClass with WaitForFirstConsumer
+# Shared storage classes for stateful workloads
+# Purpose: Ensure stateful workloads schedule to nodes with available NVMe before PVC binding
+
+# ============================================================================
+# PRIMARY STORAGECLASS: NVMe with WaitForFirstConsumer
+# ============================================================================
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-waitfirst
+  labels:
+    storage-type: nvme-optimized
+    binding-mode: wait-for-first-consumer
+    provisioner: rke.csi.rancher.io  # Adjust for your CSI driver
+  annotations:
+    description: "StorageClass with WaitForFirstConsumer binding mode for NVMe-optimized workloads"
+    documentation: "https://kubernetes.io/docs/concepts/storage/storage-classes/#volume-binding-mode"
+    implementation: "BS-3: StorageClass with WaitForFirstConsumer"
+provisioner: rke.csi.rancher.io  # Adjust for your CSI driver
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+  # Driver-specific parameters (uncomment based on your CSI driver):
+  
+  # For Rancher CSI (K3s/RKE2 default):
+  # (no additional parameters required)
+  
+  # For Hetzner Cloud CSI:
+  # type: premium-nvme  # or "premium" for SSD
+  
+  # For Longhorn:
+  # numberOfReplicas: "3"
+  # staleReplicaTimeout: "2880"
+  # fromBackup: ""
+  
+  # For AWS EBS CSI:
+  # type: gp3
+  # encrypted: "true"
+  # iops: "3000"
+  # throughput: "125"
+  
+  # For Azure Disk CSI:
+  # skuName: Premium_LRS  # or StandardSSD_LRS, UltraSSD_LRS
+  # cachingMode: ReadWrite
+  
+  # For GCP PD CSI:
+  # type: pd-ssd
+  # replication-type: none
+
+# ============================================================================
+# ALTERNATIVE: SSD with WaitForFirstConsumer
+# ============================================================================
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ssd-waitfirst
+  labels:
+    storage-type: ssd
+    binding-mode: wait-for-first-consumer
+provisioner: rke.csi.rancher.io  # Adjust for your CSI driver
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete  # Use Delete for less critical data
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+  # For Hetzner: type: premium
+  # For AWS: type: gp3
+  # For Azure: skuName: StandardSSD_LRS
+
+# ============================================================================
+# COMPATIBILITY: Immediate Binding (for comparison/backward compatibility)
+# ============================================================================
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-immediate
+  labels:
+    storage-type: nvme
+    binding-mode: immediate
+provisioner: rke.csi.rancher.io
+volumeBindingMode: Immediate  # Traditional binding mode
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+
+# ============================================================================
+# VALIDATION TEST RESOURCES
+# ============================================================================
+---
+# Test PVC for WaitForFirstConsumer validation
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-waitfirst
+  labels:
+    test: storageclass-waitfirst
+    purpose: validation
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nvme-waitfirst
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Test Pod to trigger WaitForFirstConsumer binding
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-waitfirst
+  labels:
+    test: storageclass-waitfirst
+    purpose: validation
+spec:
+  containers:
+  - name: test-container
+    image: busybox:latest
+    command: ["sh", "-c", "echo 'PVC successfully bound with WaitForFirstConsumer' && sleep 3600"]
+    volumeMounts:
+    - name: test-volume
+      mountPath: /data
+  volumes:
+  - name: test-volume
+    persistentVolumeClaim:
+      claimName: test-pvc-waitfirst
+  restartPolicy: Never
+
+# ============================================================================
+# TOPOLOGY-AWARE EXAMPLE (requires node zone labels)
+# ============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: topology-test-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nvme-waitfirst
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: topology-test-pod
+spec:
+  containers:
+  - name: app
+    image: nginx:alpine
+    volumeMounts:
+    - name: data
+      mountPath: /usr/share/nginx/html
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: topology-test-pvc
+  # Uncomment and modify based on your node topology labels:
+  # nodeSelector:
+  #   topology.kubernetes.io/zone: us-east-1a
+  #   topology.kubernetes.io/region: us-east-1
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+
+# 1. Apply StorageClass:
+#    kubectl apply -f shared-storage-classes.yaml
+#
+# 2. Validate WaitForFirstConsumer:
+#    kubectl get storageclass nvme-waitfirst -o jsonpath='{.volumeBindingMode}'
+#    # Expected: WaitForFirstConsumer
+#
+# 3. Test with validation resources:
+#    kubectl apply -f shared-storage-classes.yaml
+#    kubectl get pvc test-pvc-waitfirst  # Should show "Pending"
+#    kubectl get pod test-pod-waitfirst  # Should trigger PVC binding
+#
+# 4. Cleanup test:
+#    kubectl delete pod test-pod-waitfirst
+#    kubectl delete pvc test-pvc-waitfirst
+#
+# 5. Use in application manifests:
+#    spec:
+#      storageClassName: nvme-waitfirst
+#      resources:
+#        requests:
+#          storage: 10Gi
+
+# ============================================================================
+# CSI DRIVER COMPATIBILITY NOTES
+# ============================================================================
+
+# Rancher CSI (rke.csi.rancher.io):
+#   - Default for K3s/RKE2
+#   - Supports WaitForFirstConsumer
+#   - No additional parameters needed
+#
+# Hetzner Cloud CSI (csi.hetzner.cloud):
+#   - Supports WaitForFirstConsumer with topology
+#   - Parameters: type: premium-nvme (NVMe) or type: premium (SSD)
+#   - Requires node labels: topology.kubernetes.io/zone
+#
+# Longhorn (driver.longhorn.io):
+#   - Supports WaitForFirstConsumer
+#   - Parameters: numberOfReplicas, staleReplicaTimeout
+#   - Good for distributed storage across zones
+#
+# AWS EBS CSI (ebs.csi.aws.com):
+#   - Supports WaitForFirstConsumer with allowedTopologies
+#   - Requires zone labels: topology.ebs.csi.aws.com/zone
+#   - Example parameters: type: gp3, iops: "3000"
+#
+# Azure Disk CSI (disk.csi.azure.com):
+#   - Supports WaitForFirstConsumer
+#   - Parameters: skuName: Premium_LRS
+#   - Requires zone labels: topology.disk.csi.azure.com/zone
+#
+# GCP PD CSI (pd.csi.storage.gke.io):
+#   - Supports WaitForFirstConsumer
+#   - Parameters: type: pd-ssd
+#   - Requires zone labels: topology.gke.io/zone

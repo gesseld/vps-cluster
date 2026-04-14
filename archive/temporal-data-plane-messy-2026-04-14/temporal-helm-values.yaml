@@ -1,0 +1,329 @@
+# Temporal Helm Chart Values
+# Complete configuration for production deployment
+
+# Global configuration
+global:
+  # Image configuration
+  image:
+    repository: "temporalio/server"
+    tag: "1.30.4"
+    pullPolicy: "IfNotPresent"
+  
+  # Service configuration
+  service:
+    type: "ClusterIP"
+    annotations: {}
+  
+  # Security context
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  
+  # Resource limits
+  resources:
+    requests:
+      memory: "750Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  
+  # Node affinity for HA
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: temporal
+          topologyKey: "kubernetes.io/hostname"
+  
+  # Topology spread
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: "kubernetes.io/hostname"
+      whenUnsatisfiable: "DoNotSchedule"
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: temporal
+  
+  # Priority class
+  priorityClassName: "foundation-critical"
+
+# Server configuration (monolith mode)
+server:
+  enabled: true
+  replicaCount: 2
+  
+  # Configuration
+  config:
+    # Persistence configuration
+    persistence:
+      defaultStore: "postgresql"
+      visibilityStore: "postgresql"
+      numHistoryShards: 512
+      
+      datastores:
+        postgresql:
+          sql:
+            pluginName: "postgres12"
+            databaseName: "temporal"
+            connectAddr: "postgresql-primary.data-plane.svc.cluster.local:5432"
+            connectProtocol: "tcp"
+            user: "app"
+            password: "GcaOji6st0VY8ioKx8nP0d8L1NsUmcm8QcAM5TW4uPM="
+            maxConns: 20
+            maxIdleConns: 10
+            maxConnLifetime: "1h"
+        
+        postgresql_visibility:
+          sql:
+            pluginName: "postgres12"
+            databaseName: "temporal_visibility"
+            connectAddr: "postgresql-primary.data-plane.svc.cluster.local:5432"
+            connectProtocol: "tcp"
+            user: "app"
+            password: "GcaOji6st0VY8ioKx8nP0d8L1NsUmcm8QcAM5TW4uPM="
+            maxConns: 20
+            maxIdleConns: 10
+            maxConnLifetime: "1h"
+    
+    # Cluster metadata
+    clusterMetadata:
+      enableGlobalNamespace: false
+      failoverVersionIncrement: 10
+      masterClusterName: "active"
+      currentClusterName: "active"
+    
+    # Services configuration
+    services:
+      frontend:
+        rpc:
+          grpcPort: 7233
+          bindOnLocalHost: false
+      
+      history:
+        rpc:
+          grpcPort: 7234
+          bindOnLocalHost: false
+      
+      matching:
+        rpc:
+          grpcPort: 7235
+          bindOnLocalHost: false
+      
+      internal-frontend:
+        rpc:
+          grpcPort: 7236
+          bindOnLocalHost: false
+      
+      internal-history:
+        rpc:
+          grpcPort: 7237
+          bindOnLocalHost: false
+      
+      internal-matching:
+        rpc:
+          grpcPort: 7238
+          bindOnLocalHost: false
+    
+    # Public client
+    publicClient:
+      hostPort: "0.0.0.0:7233"
+    
+    # Archival (disabled)
+    archival:
+      history:
+        state: "disabled"
+      visibility:
+        state: "disabled"
+    
+    # Namespace configuration
+    namespace:
+      default:
+        retention: "72h"
+    
+    # Dynamic config
+    dynamicConfigClient:
+      filepath: "/etc/temporal/dynamicconfig/dynamicconfig.yaml"
+    
+    # Logging
+    log:
+      stdout: true
+      level: "info"
+      format: "json"
+  
+  # Service configuration
+  service:
+    type: "ClusterIP"
+    ports:
+      frontend: 7233
+      metrics: 9090
+  
+  # Metrics configuration
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+  
+  # Dynamic config
+  dynamicConfig:
+    enabled: true
+    configMap:
+      create: true
+      data:
+        dynamicconfig.yaml: |
+          # Dynamic configuration
+          frontend:
+            retention: "72h"
+            visibilityRetention: "168h"
+            maxConcurrentLongPollRequests: 5000
+            rps: 10000
+          
+          history:
+            numberOfShards: 512
+            workflowExecutionRetentionPeriod: "72h"
+          
+          matching:
+            maxTaskqueueActivitiesPerSecond: 100000
+          
+          system:
+            enableAdvancedVisibility: true
+            advancedVisibilityWritingMode: "dual"
+            enableArchival: false
+          
+          persistence:
+            defaultStore: "postgresql"
+            visibilityStore: "postgresql"
+            numHistoryShards: 512
+            maxQPS: 1000
+          
+          clusterMetadata:
+            enableGlobalNamespace: false
+            failoverVersionIncrement: 10
+            masterClusterName: "active"
+  
+  # Storage configuration
+  persistence:
+    enabled: true
+    storageClassName: "hcloud-volumes"
+    size: "10Gi"
+    accessModes:
+      - "ReadWriteOnce"
+  
+  # Health checks
+  livenessProbe:
+    httpGet:
+      path: "/health"
+      port: "metrics"
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    httpGet:
+      path: "/health"
+      port: "metrics"
+    initialDelaySeconds: 30
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 1
+  
+  # Pod Disruption Budget
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+
+
+
+
+
+
+# UI configuration
+web:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: "temporalio/ui"
+    tag: "2.27.0"
+    pullPolicy: "IfNotPresent"
+  
+  service:
+    type: "ClusterIP"
+    port: 8080
+  
+  ingress:
+    enabled: false
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "200m"
+
+# Admin tools
+adminTools:
+  enabled: true
+  tctl:
+    enabled: true
+
+# Network policies
+networkPolicy:
+  enabled: true
+  allowExternal: false
+  allowedNamespaces:
+    - execution-plane
+    - observability-plane
+
+# Service account
+serviceAccount:
+  create: true
+  name: "temporal-server"
+  annotations: {}
+
+# RBAC
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["configmaps", "secrets"]
+      verbs: ["get", "list", "watch"]
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile:
+    type: "RuntimeDefault"
+
+# Additional environment variables
+extraEnv:
+  - name: "TEMPORAL_ADDRESS"
+    value: "0.0.0.0:7233"
+  - name: "SKIP_DEFAULT_NAMESPACE_CREATION"
+    value: "true"
+  - name: "SERVICES"
+    value: "frontend,history,matching"
+
+# Additional volumes
+extraVolumes: []
+extraVolumeMounts: []
+
+# Annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+
+# Labels
+commonLabels:
+  app.kubernetes.io/name: "temporal"
+  app.kubernetes.io/instance: "temporal"
+  app.kubernetes.io/version: "1.25.0"
+  app.kubernetes.io/component: "server"
+  app.kubernetes.io/part-of: "control-plane"

@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd
+    app.kubernetes.io/component: config
+data:
+  # Parallelism limits for API protection
+  kubectl.parallelism.limit: "5"
+  
+  # Disable polling to save CPU cycles
+  reposerver.parallelism.limit: "0"
+  
+  # Webhook configuration
+  webhook.github.secret: "your-webhook-secret-here"
+  webhook.gitlab.secret: "your-webhook-secret-here"
+  
+  # Repository configuration
+  repository.credentials: |
+    - url: git@github.com:your-org/your-repo.git
+      sshPrivateKeySecret:
+        name: argocd-repo-secret
+        key: sshPrivateKey
+    - url: https://github.com/your-org/your-repo.git
+      usernameSecret:
+        name: argocd-repo-secret
+        key: username
+      passwordSecret:
+        name: argocd-repo-secret
+        key: password
+  
+  # Sync policy configuration
+  accounts.updatePassword: "true"
+  accounts.ui: "true"
+  
+  # Timeout configuration
+  timeout.reconciliation: "180s"
+  timeout.hard.reconciliation: "300s"
+  
+  # Resource customization
+  resource.customizations: |
+    admissionregistration.k8s.io/MutatingWebhookConfiguration:
+      ignoreDifferences: |
+        jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+    admissionregistration.k8s.io/ValidatingWebhookConfiguration:
+      ignoreDifferences: |
+        jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+    apps/Deployment:
+      ignoreDifferences: |
+        jsonPointers:
+        - /spec/replicas
+        - /spec/template/spec/containers/0/image
+        - /metadata/annotations/kubectl.kubernetes.io~1restartedAt
+    apps/StatefulSet:
+      ignoreDifferences: |
+        jsonPointers:
+        - /spec/replicas
+        - /spec/template/spec/containers/0/image
+    batch/Job:
+      ignoreDifferences: |
+        jsonPointers:
+        - /spec/template/spec/containers/0/image
+  
+  # ApplicationSet configuration
+  applicationsetcontroller.enable.progressive.syncs: "true"
+  
+  # RBAC configuration
+  policy.csv: |
+    p, role:admin, applications, *, */*, allow
+    p, role:admin, clusters, get, *, allow
+    p, role:admin, repositories, get, *, allow
+    p, role:admin, projects, get, *, allow
+    
+    p, role:readonly, applications, get, */*, allow
+    p, role:readonly, clusters, get, *, allow
+    p, role:readonly, repositories, get, *, allow
+    p, role:readonly, projects, get, *, allow
+    
+    g, your-team, role:admin
+    g, auditors, role:readonly
+  
+  # UI configuration
+  ui.banner.content: "ArgoCD GitOps Controller - 5-Plane Architecture"
+  ui.banner.url: "https://argoproj.github.io/argo-cd/"
+  ui.banner.permanent: "false"
+  
+  # Notification configuration
+  notifications.triggers: |
+    - description: Application is synced
+      oncePer: app
+      send:
+      - app-synced
+      when: app.status.operationState.phase in ['Succeeded']
+    - description: Application sync has failed
+      oncePer: app
+      send:
+      - app-sync-failed
+      when: app.status.operationState.phase in ['Failed', 'Error']
+    - description: Application is out of sync
+      oncePer: app
+      send:
+      - app-out-of-sync
+      when: app.status.sync.status == 'OutOfSync'
+  
+  # Helm configuration
+  helm.values: |
+    repositories:
+      - name: argo
+        url: https://argoproj.github.io/argo-helm
+      - name: bitnami
+        url: https://charts.bitnami.com/bitnami
+      - name: prometheus-community
+        url: https://prometheus-community.github.io/helm-charts
+  
+  # Kustomize configuration
+  kustomize.buildOptions: "--load-restrictor LoadRestrictionsNone"
+  
+  # SSH configuration
+  ssh.known.hosts.secret.name: "argocd-ssh-known-hosts"
+  ssh.known.hosts.secret.key: "ssh_known_hosts"
+  
+  # TLS configuration (if using HTTPS)
+  tls.cert.secret.name: "argocd-tls"
+  tls.key.secret.name: "argocd-tls"
+  
+  # Metrics configuration
+  metrics.enabled: "true"
+  metrics.port: "8082"
+  
+  # Cache configuration
+  redis.cache.enabled: "true"
+  redis.cache.expiration: "24h"
+  
+  # Log level
+  log.level: "info"
+  
+  # Feature flags
+  featureflag.applicationset.progressive.syncs: "true"
+  featureflag.applicationset.rolling.sync: "true"

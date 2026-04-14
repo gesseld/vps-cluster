@@ -1,0 +1,20 @@
+# Atlas migration configuration
+env:
+  dev:
+    url: postgres://app_user:${APP_PASSWORD}@pgbouncer:6432/app?sslmode=disable
+    schemas:
+      - public
+    exclude:
+      - atlas_schema_revisions
+      
+  prod:
+    url: postgres://app_user:${APP_PASSWORD}@pgbouncer:6432/app?sslmode=disable
+    schemas:
+      - public
+    exclude:
+      - atlas_schema_revisions
+
+# Migration directory
+migrations:
+  dir: file://migrations
+  format: atlas

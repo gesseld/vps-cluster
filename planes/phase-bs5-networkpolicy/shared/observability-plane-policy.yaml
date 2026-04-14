@@ -1,0 +1,54 @@
+# BS-5 NetworkPolicy: Observability Plane Isolation
+# This policy isolates monitoring, logging, and tracing components
+# Apply to: monitoring, logging, tracing namespaces
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: observability-plane-isolation
+  namespace: {{ .Namespace }}
+  labels:
+    policy-type: plane-isolation
+    plane: observability
+    managed-by: bs5-networkpolicy
+spec:
+  podSelector:
+    matchLabels:
+      # This should match your observability component labels
+      plane: observability
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules: Allow traffic from:
+  # - All namespaces (for metrics collection)
+  # - API server
+  ingress:
+  - from:
+    - namespaceSelector: {}  # Allow from all namespaces
+    ports:
+    - protocol: TCP
+      port: 9090  # Prometheus
+    - protocol: TCP
+      port: 3000  # Grafana
+    - protocol: TCP
+      port: 3100  # Loki
+  
+  # Egress rules: Allow traffic to:
+  # - All pods for scraping metrics
+  # - External storage (S3, etc.)
+  egress:
+  - to:
+    - namespaceSelector: {}  # Allow to all namespaces
+    ports:
+    - protocol: TCP
+      port: 9100  # node-exporter
+    - protocol: TCP
+      port: 8080  # application metrics
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443  # External APIs

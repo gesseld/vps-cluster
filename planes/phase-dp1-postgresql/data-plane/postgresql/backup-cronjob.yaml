@@ -1,0 +1,85 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: default
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: backup
+            image: postgres:15
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              
+              # Create backup directory
+              BACKUP_DIR="/backups/$(date +%Y%m%d_%H%M%S)"
+              mkdir -p $BACKUP_DIR
+              
+              # Perform base backup
+              echo "Starting base backup..."
+              pg_basebackup -h postgres-primary -U replicator -D $BACKUP_DIR/base -X stream -P
+              
+              # Archive WAL files
+              echo "Archiving WAL files..."
+              
+              if [ -n "$AWS_S3_BUCKET" ]; then
+                echo "Uploading backup to S3..."
+                aws s3 cp --recursive $BACKUP_DIR s3://$AWS_S3_BUCKET/postgres/
+              else
+                echo "AWS_S3_BUCKET not configured, backup stored locally"
+              fi
+              
+              # Cleanup old backups (keep last 7 days)
+              find /backups -type d -mtime +7 -exec rm -rf {} \;
+              
+              echo "Backup completed: $BACKUP_DIR"
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-replication
+                  key: password
+            - name: AWS_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: s3-backup-secret
+                  key: bucket
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: s3-backup-secret
+                  key: access-key
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: s3-backup-secret
+                  key: secret-key
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            volumeMounts:
+            - name: backup-volume
+              mountPath: /backups
+          volumes:
+          - name: backup-volume
+            emptyDir: {}

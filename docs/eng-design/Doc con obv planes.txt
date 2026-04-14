@@ -1,0 +1,1353 @@
+# Document Intelligence Platform v4.0.4
+## Foundation Planes Specification: Control, Data & Observability
+### Consolidated Implementation Tasks & Deliverables (Production-Hardened, Sequence-Enforced)
+
+---
+
+## 📋 Document Control
+
+| Field | Value |
+|-------|-------|
+| **Version** | 4.0.4 (Production-Hardened, Sequence-Aware) |
+| **Date** | 2026-04-11 |
+| **Scope** | Foundation Planes (Control, Data, Observability) |
+| **Target Infrastructure** | Hetzner Cloud: 3× CPX22 (12 vCPU / 16GB RAM / 150GB NVMe) |
+| **Cost Target** | €40-45/month (realistic with volumes + backup) |
+| **Orchestration** | K3s v1.29+ (CNI: Cilium) |
+| **SLO Targets** | RPO: 1 hour, RTO: 15-30 min, Log Latency: <2s, Metric Query: <1s |
+| **Critical Constraint** | **Resource budget scaffolding MUST be deployed before any plane workloads** |
+
+---
+
+## ⚠️ Implementation Sequence: Non-Negotiable Order
+
+> **Short answer: Yes — the resource budget scaffolding must be implemented *before* deploying individual plane components.**
+
+This isn't about writing application code first; it's about establishing Kubernetes-level guardrails that enforce your budget constraints at scheduling time. Without these in place, pods can schedule without limits, leading to resource contention, eviction storms, or silent OOM kills.
+
+```mermaid
+graph TD
+    A[Phase 0: Budget Scaffolding<br/>(Deploy First - Gate Required)] --> B[Phase 1: Shared Foundations]
+    B --> C[Phase 2: Data Plane<br/>(Stateful Dependencies)]
+    C --> D[Phase 3: Control Plane<br/>(Orchestration Layer)]
+    D --> E[Phase 4: Observability Plane<br/>(Telemetry Collection)]
+    
+    A --> A1[PriorityClasses]
+    A --> A2[ResourceQuotas/LimitRanges]
+    A --> A3[StorageClass: WaitForFirstConsumer]
+    A --> A4[Node Labels: storage-heavy]
+    A --> A5[NetworkPolicy CRD + default-deny template]
+    
+    B --> B1[Cert-Manager + SPIRE PKI bootstrap]
+    B --> B2[ServiceAccounts + RBAC baseline]
+    B --> B3[NetworkPolicy default-deny applied]
+    
+    C --> C1[PostgreSQL primary+replica]
+    C --> C2[NATS JetStream 3-replica cluster]
+    C --> C3[Temporal 2-replica HA]
+    C --> C4[Redis]
+    
+    D --> D1[Kyverno + SPIRE Server]
+    D --> D2[ArgoCD GitOps controller]
+    D --> D3[Control NATS (stateless)]
+    
+    E --> E1[VictoriaMetrics + vmagent]
+    E --> E2[Fluent Bit + Loki]
+    E --> E3[Alerting + Grafana dashboards]
+```
+
+---
+
+## 1. Architectural Foundation
+
+### 1.1 Design Principles (Sequence-Aware)
+
+| Principle | Implementation | Rationale | Sequence Dependency |
+|-----------|----------------|-----------|-------------------|
+| **Zero-Trust Boundaries** | mTLS between all planes; SPIFFE identities for workload attestation; NetworkPolicy default-deny with explicit allow + egress restrictions | Prevent lateral movement; enforce least-privilege network access | NetworkPolicy CRD + default-deny must exist before any workload deployment |
+| **Resource Frugality** | 8.5GB RAM realistic budget for foundation (53% of 16GB cluster); aggressive requests=limits to prevent overcommit; tiered PriorityClasses | Account for real-world overhead; prevent noisy-neighbor eviction | **PriorityClasses + ResourceQuotas MUST be applied before any pod spec references them** |
+| **High Availability** | 3-replica NATS JetStream cluster; PostgreSQL primary + async read replica; Temporal 2-replica active-active; topology spread constraints with `requiredDuringScheduling` | Eliminate single points of failure for critical path services | Node labels + StorageClass with `WaitForFirstConsumer` must exist before stateful workloads schedule |
+| **Unified Telemetry** | Fluent Bit (not Promtail+OTel) for logs + metrics shipping; VictoriaMetrics for TSDB with cardinality controls; 2s end-to-end latency target | Reduce resource footprint while maintaining observability fidelity | Observability plane deployed last to avoid self-monitoring bootstrap issues |
+| **Immutable Infrastructure** | GitOps via ArgoCD; Kyverno policies enforce labels/limits; all changes tracked in Git; schema migrations via Atlas/Flyway | Ensure reproducibility, auditability, and safe schema evolution | ArgoCD deployed after Kyverno to enforce policy-on-deployment |
+| **Backpressure-Aware** | Queue depth monitoring on NATS; circuit breaker patterns in execution plane; API server QoS controls | Prevent cascade failures during load spikes | Monitoring must be active before load-testing execution plane |
+
+### 1.2 Resource Budget (Foundation Planes - Realistic)
+
+| Plane | RAM Request | RAM Limit | CPU Request | CPU Limit | Critical Pods | Notes |
+|-------|-------------|-----------|-------------|-----------|---------------|-------|
+| **Control** | 2.8GB | 4.2GB | 1.8 | 3.2 | Temporal×2 (750MB ea), Kyverno, SPIRE | +700MB for Temporal HA |
+| **Data** | 4.2GB | 7.1GB | 2.8 | 4.8 | PostgreSQL primary+replica, NATS×3 (170MB ea), MinIO, Redis | +800MB for read replica |
+| **Observability** | 1.5GB | 2.9GB | 1.0 | 1.9 | Fluent Bit (80MB/node), VMSingle (512MB+snapshot), Loki | +300MB for backup overhead |
+| **Total** | **8.5GB** | **14.2GB** | **5.6** | **9.9** | — | Realistic baseline |
+| **Headroom** | **7.5GB** | **1.8GB** | **6.4** | **2.1** | For Execution + AI planes | Tight but workable |
+
+> **Burst Strategy & Priority Tiers:**
+> - K3s allows 2× request overcommit. Foundation pods use tiered `PriorityClass` to prevent eviction during resource pressure.
+> - `foundation-critical`: PostgreSQL, NATS, Temporal (priority 1000000)
+> - `foundation-high`: Kyverno, SPIRE, MinIO (priority 900000)
+> - `foundation-medium`: Observability components (priority 800000)
+> - All foundation pods set `preemptionPolicy: PreemptLowerPriority`
+> - **⚠️ These PriorityClasses must be created BEFORE any pod spec references them**
+
+---
+
+## 2. Phase 0: Budget Scaffolding (MANDATORY FIRST STEP)
+
+### 2.1 Purpose
+Encode resource constraints as Kubernetes primitives that the scheduler enforces at admission time. This phase creates the guardrails that make "resource frugality" enforceable, not aspirational.
+
+### 2.2 Implementation Tasks
+
+#### **Task BS-1: PriorityClasses Deployment**
+**Objective:** Create tiered priority classes that protect critical foundation workloads during resource pressure.
+
+**Sub-tasks:**
+- Apply `foundation-critical` (value: 1000000) for PostgreSQL, NATS, Temporal
+- Apply `foundation-high` (value: 900000) for Kyverno, SPIRE, MinIO
+- Apply `foundation-medium` (value: 800000) for observability components
+- Set `preemptionPolicy: PreemptLowerPriority` on all classes
+- Document priority hierarchy in `shared/priority-classes.md`
+
+**Deliverables:**
+```yaml
+# shared/priority-classes.yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: foundation-critical
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Critical foundation: PostgreSQL, NATS, Temporal"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: foundation-high
+value: 900000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "High-priority foundation: Kyverno, SPIRE, MinIO"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: foundation-medium
+value: 800000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Medium-priority foundation: Observability components"
+```
+
+**Validation:**
+```bash
+kubectl get priorityclass | grep foundation
+# Expected: foundation-critical, foundation-high, foundation-medium all present
+```
+
+#### **Task BS-2: ResourceQuotas + LimitRanges per Namespace**
+**Objective:** Enforce namespace-level resource budgets and container-level defaults.
+
+**Sub-tasks:**
+- Create `ResourceQuota` for each foundation namespace (control-plane, data-plane, observability-plane)
+- Set hard limits matching budget table (e.g., control-plane: 2.8Gi request memory)
+- Create `LimitRange` to inject default requests/limits for containers without explicit specs
+- Set `max` limits to prevent runaway pods
+- Document quota rationale in `shared/resource-budget.md`
+
+**Deliverables:**
+```yaml
+# shared/resource-quotas.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: control-plane-quota
+  namespace: control-plane
+spec:
+  hard:
+    requests.memory: "2.8Gi"
+    limits.memory: "4.2Gi"
+    requests.cpu: "1.8"
+    limits.cpu: "3.2"
+    pods: "15"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: control-plane-defaults
+  namespace: control-plane
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      memory: "256Mi"
+      cpu: "100m"
+    default:
+      memory: "512Mi"
+      cpu: "250m"
+    max:
+      memory: "1Gi"
+      cpu: "1"
+```
+
+**Validation:**
+```bash
+kubectl describe resourcequota -n control-plane
+kubectl describe limitrange -n control-plane
+# Verify hard limits match budget; defaults are reasonable
+```
+
+#### **Task BS-3: StorageClass with WaitForFirstConsumer**
+**Objective:** Ensure stateful workloads schedule to nodes with available NVMe before PVC binding.
+
+**Sub-tasks:**
+- Define `nvme-waitfirst` StorageClass with `volumeBindingMode: WaitForFirstConsumer`
+- Set `allowVolumeExpansion: true` for future growth
+- Document CSI driver compatibility (Rancher CSI, Longhorn, etc.)
+- Test PVC creation with topology constraints
+
+**Deliverables:**
+```yaml
+# shared/storage-classes.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-waitfirst
+provisioner: rke.csi.rancher.io  # Adjust for your CSI driver
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+```
+
+**Validation:**
+```bash
+kubectl get storageclass nvme-waitfirst -o jsonpath='{.volumeBindingMode}'
+# Expected: WaitForFirstConsumer
+```
+
+#### **Task BS-4: Node Labeling for Topology Awareness**
+**Objective:** Enable topology-aware scheduling for I/O-heavy workloads.
+
+**Sub-tasks:**
+- Label 2 of 3 nodes as `node-role=storage-heavy` for PostgreSQL + MinIO placement
+- Leave 1 node general-purpose for control/observability workloads
+- Document labeling strategy in `shared/topology.md`
+- Create script for reproducible labeling
+
+**Deliverables:**
+```bash
+#!/bin/bash
+# scripts/label-nodes.sh
+set -e
+NODES=$(kubectl get nodes -o name | cut -d/ -f2)
+# Label first two nodes as storage-heavy
+echo "$NODES" | head -n 2 | while read node; do
+  kubectl label node "$node" node-role=storage-heavy --overwrite
+done
+echo "✅ Nodes labeled: $(kubectl get nodes -l node-role=storage-heavy -o name | wc -l) storage-heavy"
+```
+
+**Validation:**
+```bash
+kubectl get nodes -l node-role=storage-heavy
+# Expected: 2 nodes labeled
+```
+
+#### **Task BS-5: NetworkPolicy CRD + Default-Deny Template**
+**Objective:** Ensure network isolation primitives are available before workloads deploy.
+
+**Sub-tasks:**
+- Verify NetworkPolicy CRD is installed (Cilium/CNI requirement)
+- Create default-deny template for ingress + egress
+- Document policy pattern for plane-specific policies
+- Test policy application on dummy pod
+
+**Deliverables:**
+```yaml
+# shared/network-policy-template.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ .Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  # No rules = deny all by default
+```
+
+**Validation:**
+```bash
+kubectl api-resources | grep networkpolicies
+# Expected: networkpolicies present
+kubectl apply -f shared/network-policy-template.yaml --dry-run=client
+# Expected: no errors
+```
+
+### 2.3 Phase 0 Success Criteria (GATE 0)
+
+| Criterion | Metric | Validation Method | Blocker If Failed |
+|-----------|--------|-------------------|------------------|
+| **PriorityClasses** | All 3 classes present + correct values | `kubectl get priorityclass \| grep foundation` | ❌ Cannot proceed: pod specs reference missing classes |
+| **ResourceQuotas** | Quotas applied to all 3 namespaces | `kubectl get resourcequota -n control-plane data-plane observability-plane` | ❌ Cannot proceed: risk of unbounded resource consumption |
+| **LimitRanges** | Defaults + max limits configured | `kubectl describe limitrange -n control-plane` | ⚠️ Warning: pods may schedule with unsafe defaults |
+| **StorageClass** | `WaitForFirstConsumer` mode active | `kubectl get sc nvme-waitfirst -o jsonpath='{.volumeBindingMode}'` | ❌ Cannot proceed: stateful pods may schedule to wrong node |
+| **Node Labels** | ≥2 nodes labeled `storage-heavy` | `kubectl get nodes -l node-role=storage-heavy` | ❌ Cannot proceed: topology constraints will fail |
+| **NetworkPolicy CRD** | CRD available + default-deny applicable | `kubectl api-resources \| grep networkpolicies` | ❌ Cannot proceed: zero-trust boundary cannot be enforced |
+
+> **🚨 GATE 0 IS MANDATORY**: If any criterion fails, halt deployment. Fix scaffolding before proceeding to Phase 1.
+
+---
+
+## 3. Phase 1: Shared Foundations (Post-Scaffolding)
+
+### 3.1 Purpose
+Deploy cross-cutting concerns that all planes depend on: identity bootstrap, RBAC baseline, and network isolation enforcement.
+
+### 3.2 Implementation Tasks
+
+#### **Task SF-1: Cert-Manager + SPIRE PKI Bootstrap**
+**Objective:** Establish certificate authority for mTLS before any workload requests certificates.
+
+**Sub-tasks:**
+- Deploy Cert-Manager v1.13+ (ClusterIssuer for self-signed root)
+- Deploy SPIRE Server + Agent with PostgreSQL backend (Data Plane dependency noted)
+- Configure Node Attestor: `k8s_psat` (Proof of Possession)
+- Configure Workload Attestor: `k8s` (Unix + Kubernetes)
+- Create registration entries for foundation namespaces
+- Enable SDS (Secret Discovery Service) for Envoy/NGINX mTLS integration
+- Set SVID TTL: 1 hour (short-lived for security)
+- **Fallback mode**: ConfigMap toggle to temporarily use cert-manager TLS if SPIRE unavailable
+- **Health monitoring**: Export SPIRE server/agent metrics to vmagent; alert on SVID issuance latency >5s
+
+**Deliverables:**
+- `shared/pki/cert-manager.yaml`
+- `control-plane/spire/server.yaml` (StatefulSet with PVC)
+- `control-plane/spire/agent-daemonset.yaml`
+- `control-plane/spire/roles.yaml` (RBAC for TokenReview)
+- `control-plane/spire/entries.yaml` (Registration entries)
+- `control-plane/spire/fallback-config.yaml` (cert-manager fallback toggle)
+- `control-plane/spire/metrics-exporter.yaml`
+- ConfigMap `spire-server-config` (PostgreSQL connection string)
+
+**Validation:**
+```bash
+kubectl get certificaterequest -A | grep -q Approved
+# New pod receives /tmp/spire-sockets/agent.sock within 5 seconds of startup
+curl http://spire-server:9090/metrics | grep spire_server_svid_issuance_latency_seconds
+```
+
+#### **Task SF-2: ServiceAccounts + RBAC Baseline**
+**Objective:** Create least-privilege service accounts before workloads reference them.
+
+**Sub-tasks:**
+- Create `temporal-server`, `kyverno`, `spire-server` SAs in control-plane
+- Create `postgres`, `nats`, `minio` SAs in data-plane
+- Create `vmagent`, `fluent-bit`, `loki` SAs in observability-plane
+- Apply minimal RBAC roles (document in `shared/rbac-matrix.md`)
+- Exclude `kube-system` and `kyverno` namespaces from policies
+
+**Deliverables:**
+- `shared/rbac/foundation-sas.yaml`
+- `shared/rbac/foundation-roles.yaml`
+
+**Validation:**
+```bash
+kubectl auth can-i --list --as=system:serviceaccount:control-plane:temporal-server
+# Expected: minimal permissions aligned with spec
+```
+
+#### **Task SF-3: NetworkPolicy Default-Deny Applied**
+**Objective:** Enforce zero-trust boundary before any workload can communicate.
+
+**Sub-tasks:**
+- Apply default-deny policy to each foundation namespace
+- Create explicit allow rules for known dependencies (document in interface matrix)
+- Test isolation: attempt cross-namespace pod-to-pod connection (should fail)
+- Document egress restrictions per plane
+
+**Deliverables:**
+- `shared/network-policies/default-deny.yaml`
+- `shared/network-policies/interface-matrix.yaml` (reference)
+
+**Validation:**
+```bash
+# Attempt unauthorized connection
+kubectl run test-pod --rm -it --image=curlimages/curl --namespace=control-plane \
+  -- curl -m 2 http://postgres.data-plane.svc.cluster.local:5432
+# Expected: connection timeout/refused (policy working)
+```
+
+### 3.3 Phase 1 Success Criteria (GATE 1)
+
+| Criterion | Metric | Validation Method | Blocker If Failed |
+|-----------|--------|-------------------|------------------|
+| **PKI Ready** | SPIRE Server Running; SVID issuance <5s | `kubectl get pods -n control-plane -l app=spire-server` | ❌ Cannot proceed: mTLS-dependent workloads will fail |
+| **RBAC Minimal** | ServiceAccounts have least privilege | `kubectl auth can-i --list` per SA | ⚠️ Warning: security boundary not fully enforced |
+| **Network Isolation** | Default-deny blocks cross-namespace traffic | Unauthorized connection test fails | ❌ Cannot proceed: zero-trust principle violated |
+
+---
+
+## 4. Phase 2: Data Plane Implementation (Stateful Dependencies First)
+
+> **Why Data Plane before Control Plane?** Temporal (now in Data Plane) depends on PostgreSQL for persistence. Deploy dependencies before dependents. Control Plane components (Kyverno, SPIRE, ArgoCD) depend on shared foundations.
+
+### 4.1 Purpose & Scope
+The **memory and nervous system**: persistent storage, event streaming, caching, and object storage. I/O bound, optimized for throughput. Contains the only stateful data in the foundation.
+
+### 4.2 Implementation Tasks
+
+#### **Task DP-1: PostgreSQL with RLS, Pooling & Read Replica**
+**Objective:** Tenant-isolated database with connection pooling and read scaling.
+
+**Sub-tasks:**
+- Deploy PostgreSQL 15 primary (StatefulSet, 50GB PVC) with `volumeBindingMode: WaitForFirstConsumer`
+- Deploy PostgreSQL 15 **async read replica** (StatefulSet, 50GB PVC) on separate node
+- Enable `pgcrypto` extension for UUID generation
+- Configure Row-Level Security (RLS):
+  - `documents` table: `USING (tenant_id = current_setting('app.current_tenant')::UUID)`
+  - `workflows` table: RLS by Temporal namespace
+- Deploy pgBouncer (transaction pooling mode):
+  - `max_client_conn = 500`
+  - `default_pool_size = 20`
+  - Route writes to primary, reads to replica via `app.read_only` GUC
+- Create databases: `app`, `temporal_visibility`, `spire`
+- Automated backups: Daily base backup + WAL archiving to MinIO bucket `backups/postgres`
+- **Schema migrations**: Integrate Atlas/Flyway init container for versioned migrations
+- **Topology spread**: PostgreSQL primary and replica anti-affinity with MinIO (don't colocate I/O heavy pods); label nodes `node-role=storage-heavy`
+
+**Deliverables:**
+- `data-plane/postgresql/primary-statefulset.yaml`
+- `data-plane/postgresql/replica-statefulset.yaml`
+- `data-plane/postgresql/pgbouncer.yaml` (with read/write routing)
+- `data-plane/postgresql/init-scripts/01-rls.sql`
+- `data-plane/postgresql/init-scripts/02-tenants.sql`
+- `data-plane/postgresql/migrations/atlas-config.yaml` (or flyway)
+- `data-plane/postgresql/backup-cronjob.yaml`
+- Secret `postgres-superuser`, `postgres-app-user`
+
+**Validation:**
+```bash
+# RLS test
+psql -c "SET app.current_tenant = 'A'; SELECT * FROM documents;" # returns only tenant A
+# Read replica routing
+psql -c "EXPLAIN ANALYZE SELECT * FROM documents WHERE id=1;" # shows replica host
+```
+
+#### **Task DP-2: NATS JetStream HA Cluster (3-Replica + Backpressure)**
+**Objective:** High-availability event bus with persistence and backpressure controls.
+
+**Sub-tasks:**
+- Deploy NATS Server 2.10+ with JetStream (3 replicas, Parallel pod management)
+- **Resource per replica:** 170MB request / 256MB limit
+- Configure cluster routes for mesh (3-node cluster)
+- Define Streams with backpressure monitoring:
+  - `DOCUMENTS`: Subjects `data.doc.>`, retention=WorkQueue, max-msgs=100k, replicas=3, `max_bytes: 5GB`
+  - `EXECUTION`: Subjects `exec.task.>`, retention=Interest, max-age=24h, replicas=3
+  - `OBSERVABILITY`: Subjects `obs.metric.>`, retention=Limits, max-bytes=1GB, replicas=2
+- Enable TLS for client connections (port 4222)
+- **Topology spread**: One replica per node mandatory (maxSkew: 0, `whenUnsatisfiable: DoNotSchedule`)
+- **Backpressure monitoring**: Export `nats_jetstream_stream_consumer_pending_msgs` to vmagent; alert on queue depth >80%
+- Add **PodDisruptionBudget**: `minAvailable: 2` (maintain quorum)
+
+**Deliverables:**
+- `data-plane/nats/values.yaml` (Helm values with 3 replicas)
+- `data-plane/nats/stream-config.yaml` (with backpressure limits)
+- `data-plane/nats/networkpolicy.yaml` (allow from execution, control, observability)
+- `data-plane/nats/pdb.yaml`
+- `data-plane/nats/metrics-exporter.yaml`
+
+**Validation:**
+```bash
+nats server list  # shows 3 servers
+nats stream info DOCUMENTS  # shows "Clustered: Yes"
+# Metrics show consumer pending <80% threshold
+```
+
+#### **Task DP-3: Temporal Server Deployment (HA-Enhanced)**
+**Objective:** Deploy Temporal Server with active-active HA in Data Plane.
+
+**Sub-tasks:**
+- Deploy PostgreSQL schemas (`temporal_visibility` DB) with connection pooling
+- Configure Temporal Server in "monolith" mode (frontend+history+matching in one container) for resource efficiency
+- **Resource spec per replica:** 750MB request / 1GB limit (prevents OOM during workflow bursts)
+- Deploy **2 replicas** with `podAntiAffinity: requiredDuringSchedulingIgnoredDuringExecution`
+- Enable mTLS on port 7233 using SPIFFE certificates
+- Configure retention: 3 days completed workflows, 7 days visibility records
+- Set `PriorityClass: foundation-critical`
+- **Topology spread:** Ensure Temporal pods distribute across nodes (maxSkew: 1, `whenUnsatisfiable: DoNotSchedule`)
+- Add **PodDisruptionBudget**: `minAvailable: 1`
+
+**Deliverables:**
+- `data-plane/temporal/temporal-server.yaml` (StatefulSet with 2 replicas)
+- `data-plane/temporal/pdb.yaml` (PodDisruptionBudget)
+- `data-plane/temporal/config/dynamicconfig.yaml` (retention policies)
+- `data-plane/temporal/networkpolicy.yaml` (ingress from execution-plane)
+- `data-plane/temporal/service.yaml` (headless + load-balanced frontend)
+- Secret `temporal-postgres-creds` (PostgreSQL reference)
+
+**Validation:**
+```bash
+tctl cluster health  # returns SERVING
+kubectl get pods -n data-plane -l app=temporal  # shows 2/2 Running
+```
+
+#### **Task DP-4: MinIO with Lifecycle & Near-Real-Time Replication**
+**Objective:** S3-compatible storage with disaster recovery and improved RPO.
+
+**Sub-tasks:**
+- Deploy MinIO (single-node, erasure coding disabled for 16GB constraint) with `volumeBindingMode: WaitForFirstConsumer`
+- Buckets: `documents-raw`, `documents-processed`, `backups`, `observability-metrics`
+- Enable versioning on `documents-processed` (compliance)
+- Lifecycle policies:
+  - `documents-raw`: Transition to cold after 90 days (if external S3 configured)
+  - `observability-metrics`: Expire after 30 days
+- **Near-real-time replication** to external storage (Hetzner Storage Box or S3):
+  - CronJob running `mc mirror --watch` (continuous sync)
+  - Replicate `documents-processed` and `backups` buckets
+  - Monitor replication lag via `mc admin replicate status`
+- **Topology spread**: Prefer separate node from PostgreSQL; label node `node-role=storage-heavy`
+- Add **PodDisruptionBudget**: `minAvailable: 1`
+
+**Deliverables:**
+- `data-plane/minio/statefulset.yaml` (100GB PVC)
+- `data-plane/minio/bucket-job.yaml` (init job)
+- `data-plane/minio/lifecycle-policy.yaml`
+- `data-plane/minio/replication-cronjob.yaml` (with `--watch` flag)
+- `data-plane/minio/replication-monitor.yaml` (lag alerting)
+- `data-plane/minio/pdb.yaml`
+- Secret `minio-root-credentials`, `minio-replication-creds`
+
+**Validation:**
+```bash
+mc replicate ls documents-processed  # shows active replication
+mc admin replicate status  # shows lag <5 minutes; hourly timestamp updates
+```
+
+#### **Task DP-5: Redis Multi-Role (RDB-only + Memory Protection)**
+**Objective:** Cache tier with reduced I/O (AOF disabled) and memory safeguards.
+
+**Sub-tasks:**
+- Deploy Redis 7+ with RDB snapshots only (save 900 1, save 300 10, save 60 10000)
+- Disable AOF (`appendonly no`) to reduce disk I/O
+- Logical databases:
+  - DB 0: Sessions (TTL 24h)
+  - DB 1: Rate limiting (TTL 1h)
+  - DB 2: Semantic cache for AI Plane (TTL 7d)
+- Maxmemory: 512MB with `allkeys-lru` eviction
+- Exporter sidecar for metrics
+- Add **memory alerting**: Alert on `redis_memory_used_bytes` > 450MB
+
+**Deliverables:**
+- `data-plane/redis/deployment.yaml`
+- `data-plane/redis/configmap.yaml` (redis.conf)
+- `data-plane/redis/metrics-alert.yaml`
+
+**Validation:**
+```bash
+redis-cli CONFIG GET appendonly  # returns "no"
+redis-cli INFO keyspace  # shows dbs; memory usage <450MB
+```
+
+### 4.3 Data Plane Success Criteria (GATE 2)
+
+| Criterion | Metric | Validation Method |
+|-----------|--------|-------------------|
+| **RLS Enforcement** | Zero cross-tenant leakage | SQL query with tenant A context returns zero tenant B rows |
+| **NATS HA** | 3/3 replicas Ready; quorum maintained during pod kill | `kubectl get pods -n data-plane -l app=nats` shows 3/3 Running; kill 1 pod → cluster recovers |
+| **JetStream Health** | All streams replicated; backpressure <80% | `nats stream info` shows "Clustered: Yes" and no lag; metrics show pending <80% |
+| **MinIO Durability** | Replication lag <5 minutes | `mc admin replicate status` shows recent timestamps; lag metric <300s |
+| **Connection Pooling** | <10% overhead; read queries routed to replica | pgBouncer shows <20 active backends with 100 app connections; `EXPLAIN` shows replica host |
+| **Topology Compliance** | No node has >1 I/O heavy pod; storage nodes labeled | `kubectl get pods -n data-plane -o wide` shows PostgreSQL and MinIO on different nodes; nodes labeled `node-role=storage-heavy` |
+| **Schema Versioning** | Migrations applied via Atlas/Flyway; no manual SQL | `kubectl logs migration-init` shows successful migration; Git history shows versioned migration files |
+
+---
+
+## 5. Phase 3: Control Plane Implementation (Orchestration Layer)
+
+> **Why Control Plane after Data Plane?** Kyverno requires SPIRE; ArgoCD requires Git repo access. Control Plane components manage orchestration and policy enforcement.
+
+### 5.1 Purpose & Scope
+The **governance layer**: policy enforcement, identity management, and GitOps. Manages security, compliance, and deployment orchestration across all planes.
+
+### 5.2 Implementation Tasks
+
+
+
+#### **Task CP-1: Kyverno Policy Engine (Consolidated + Rate Limiting)**
+**Objective:** Replace OPA with Kyverno for lower overhead and native Kubernetes UX, with API protection.
+
+**Sub-tasks:**
+- Deploy Kyverno v1.11+ (2 replicas for HA, but lightweight)
+- Create `ClusterPolicy` resources:
+  - `require-plane-labels`: Enforce `plane ∈ {control,data,observability,execution,ai}`
+  - `require-tenant-labels`: Enforce `tenant` label for RLS
+  - `require-resource-limits`: Block pods without requests/limits
+  - `block-privileged-exec`: Deny privileged containers in execution/ai planes
+  - `enforce-readonly-root-fs`: Immutable container filesystems
+  - `rate-limit-admission`: Limit pod creation bursts per namespace (prevent ArgoCD sync storms)
+- Configure mutation webhook to inject SPIFFE sidecars automatically
+- Exclude `kube-system` and `kyverno` namespaces from policies
+- Enable Kyverno metrics export to vmagent
+
+**Deliverables:**
+- `control-plane/kyverno/kustomization.yaml`
+- `control-plane/kyverno/policies/require-labels.yaml`
+- `control-plane/kyverno/policies/resource-constraints.yaml`
+- `control-plane/kyverno/policies/security-baseline.yaml`
+- `control-plane/kyverno/policies/rate-limit-admission.yaml`
+- `control-plane/kyverno/metrics-service.yaml`
+
+**Validation:**
+```bash
+# Policy enforcement test
+kubectl run nginx --image=nginx --namespace=default  # Rejected with policy message
+# Rate limiting test: burst creation of 50 pods throttled
+```
+
+#### **Task CP-2: SPIFFE/SPIRE Identity Foundation (Resilient)**
+**Objective:** Establish workload identity with PostgreSQL backend and fallback mode for operational resilience.
+
+*(Already deployed in Phase 1; this task validates integration with Control Plane workloads)*
+
+**Sub-tasks:**
+- Verify registration entries for Control Plane workloads:
+  - `spiffe://cluster.local/ns/control-plane/sa/kyverno`
+  - `spiffe://cluster.local/ns/control-plane/sa/argocd`
+- Enable SDS (Secret Discovery Service) for Control Plane mTLS integration
+- Test fallback mode: toggle ConfigMap to cert-manager; verify certs still issued
+- **Health monitoring**: Alert on SVID issuance latency >5s
+
+**Validation:**
+```bash
+# New pod receives /tmp/spire-sockets/agent.sock within 5 seconds of startup
+# Toggle fallback ConfigMap → certs issued via cert-manager
+```
+
+#### **Task CP-3: ArgoCD GitOps Controller (Protected)**
+**Objective:** Declarative deployment with drift detection and API server protection.
+
+**Sub-tasks:**
+- Deploy ArgoCD v2.9+ (non-HA mode for resource constraints, single replica)
+- Configure ApplicationSets for 5-plane structure:
+  - `control-plane-appset`, `data-plane-appset`, `observability-plane-appset`
+- Enable automated sync with pruning (remove resources not in Git)
+- Configure webhook-based triggers (GitHub/GitLab webhook → ArgoCD API)
+- Disable polling (save CPU cycles)
+- Set resource quotas for ArgoCD namespace (512MB limit)
+- **API protection**: Configure ArgoCD to respect Kyverno rate limits; add `--kubectl-parallelism-limit=5`
+
+**Deliverables:**
+- `control-plane/argocd/kustomization.yaml`
+- `control-plane/argocd/applicationsets/control-plane.yaml`
+- `control-plane/argocd/repository-secret.yaml` (Git credentials)
+- `control-plane/argocd/resource-quota.yaml`
+- `control-plane/argocd/argocd-cm.yaml` (parallelism limits)
+
+**Validation:**
+```bash
+# Manual deployment change → ArgoCD UI shows "OutOfSync" within 60 seconds
+# Burst sync attempts throttled by Kyverno rate-limit-admission policy
+```
+
+#### **Task CP-4: Control NATS (Stateless Signaling)**
+**Objective:** Lightweight, stateless NATS instance for critical control signals only (not data streaming).
+
+**Sub-tasks:**
+- Deploy NATS Server **without JetStream** (stateless)
+- Subjects: `control.critical.*`, `control.audit.*`
+- Enable TLS using Cert-Manager certificates
+- Connect to Data Plane NATS for cross-plane message bridging (if needed)
+- Add **PodDisruptionBudget**: `minAvailable: 1`
+
+**Deliverables:**
+- `control-plane/nats/stateless-nats.yaml`
+- `control-plane/nats/pdb.yaml`
+
+**Validation:**
+```bash
+nats-sub control.critical.alert  # receives test message from control-plane namespace
+```
+
+### 5.3 Control Plane Success Criteria (GATE 3)
+
+| Criterion | Metric | Validation Method |
+|-----------|--------|-------------------|
+| **Temporal Stability** | 0 OOM kills in 7 days; 2/2 replicas Ready | `kubectl get pods -n control-plane -l app=temporal` = 2/2; restartCount = 0 |
+| **Policy Enforcement** | 100% block rate for non-compliant; rate limiting active | `kubectl auth can-i create pod --as=system:serviceaccount:default:default` returns "no"; burst creation throttled |
+| **GitOps Drift** | <60s detection; sync storms prevented | Modify deployment manually → ArgoCD UI shows "OutOfSync" within 1 minute |
+| **Identity Issuance** | <5s attestation; fallback mode functional | Pod status "Running" → socket exists in <5s; toggle fallback → certs issued via cert-manager |
+| **Topology Spread** | No node >1 Control Plane critical pod | `kubectl get pods -n control-plane -o wide` shows Temporal replicas on different nodes |
+| **SPIRE Health** | SVID issuance latency <5s; agent connectivity 100% | `curl http://spire-server:9090/metrics` shows latency histogram; agent pod status Running |
+
+---
+
+## 6. Phase 4: Observability Plane Implementation (Telemetry Last)
+
+> **Why Observability Last?** Avoid self-monitoring bootstrap issues. Deploy telemetry after systems are stable enough to generate meaningful signals.
+
+### 6.1 Purpose & Scope
+The **sensory system**: unified telemetry collection (logs + metrics), long-term storage, and alerting. Uses VictoriaMetrics (not Prometheus) for 60% resource savings and Fluent Bit (not Promtail+OTel) for unified log shipping.
+
+### 6.2 Implementation Tasks
+
+#### **Task OP-1: VictoriaMetrics with Cardinality Control & Backup**
+**Objective:** High-performance metrics database with strict resource limits and disaster recovery.
+
+**Sub-tasks:**
+- Deploy VMSingle (not cluster mode, resource constrained) with **PodDisruptionBudget**: `minAvailable: 1`
+- **Flags:**
+  - `-retentionPeriod=30d`
+  - `-dedup.minScrapeInterval=30s` (reduce cardinality)
+  - `-search.maxQueryDuration=30s`
+  - `-search.maxConcurrentRequests=8`
+  - `-memory.allowedPercent=80`
+  - `-snapshotCreateURL=http://localhost:8428/api/v1/snapshot/create` (enable snapshots)
+- Configure **hourly snapshot backup** to MinIO bucket `observability-metrics-backups` via CronJob
+- Configure remote storage backup to MinIO bucket `observability-metrics` (secondary)
+- Set up recording rules for SLOs: `slo:availability`, `slo:latency`
+- **Resource:** 512MB request / 1GB limit
+- **Alerting**: Alert on snapshot failure; cardinality growth >45k series
+
+**Deliverables:**
+- `observability-plane/victoriametrics/statefulset.yaml` (50GB PVC)
+- `observability-plane/victoriametrics/pdb.yaml`
+- `observability-plane/victoriametrics/recording-rules.yaml`
+- `observability-plane/victoriametrics/networkpolicy.yaml`
+- `observability-plane/victoriametrics/snapshot-cronjob.yaml`
+- `observability-plane/victoriametrics/alerts.yaml` (cardinality, snapshot failure)
+
+**Validation:**
+```bash
+curl http://vmsingle:8428/api/v1/series/count  # returns <50,000 series
+# MinIO bucket shows hourly snapshots
+```
+
+#### **Task OP-2: vmagent DaemonSet with Relabeling & Egress Control**
+**Objective:** Efficient metrics collection with cardinality reduction and network isolation.
+
+**Sub-tasks:**
+- Deploy vmagent as DaemonSet on all nodes (hostNetwork for node metrics)
+- Scrape configs:
+  - Kubernetes pods (via API)
+  - Nodes (cadvisor, node-exporter)
+  - Data Plane: PostgreSQL exporter, NATS monitoring (8222), Redis exporter, MinIO
+  - Control Plane: Temporal metrics, Kyverno metrics, SPIRE metrics
+- **Relabel rules:**
+  - Drop labels: `pod_uid`, `container_id`, `pod_template_hash`, `controller_revision_hash`
+  - Enforce labels: `plane`, `namespace`, `tenant`
+  - Drop metrics without `plane` label
+- Remote write to VMSingle with zstd compression
+- **NetworkPolicy**: Restrict egress to VMSingle and Data Plane services only
+
+**Deliverables:**
+- `observability-plane/vmagent/daemonset.yaml`
+- `observability-plane/vmagent/config.yaml` (scrape configs)
+- `observability-plane/vmagent/networkpolicy.yaml` (egress restrictions)
+
+**Validation:**
+```bash
+# All targets UP in vmagent:8429/targets page
+# NetworkPolicy blocks unauthorized egress
+```
+
+#### **Task OP-3: Fluent Bit Unified Pipeline (Noise Reduction + Audit)**
+**Objective:** Single-agent log collection (replaces Promtail+OTel Collector) with intelligent filtering.
+
+**Sub-tasks:**
+- Deploy Fluent Bit DaemonSet (v3.0.4)
+- **Resource:** 80MB request / 120MB limit per node
+- Inputs: Tail `/var/log/containers/*.log`
+- Filters:
+  - Kubernetes metadata enrichment
+  - Lua script `drop_noise.lua`: Drop health check logs (200 OK, /health, /ready)
+  - Lua script `enrich_audit.lua`: Add `audit=true` label to control-plane logs
+- Outputs:
+  - Loki: `observability-plane` namespace logs
+  - NATS: `obs.audit.{plane}` for audit trail (to Data Plane NATS)
+- Buffer: Mem_Buf_Limit 10MB (backpressure handling)
+- **NetworkPolicy**: Restrict egress to Loki and Data Plane NATS only
+
+**Deliverables:**
+- `observability-plane/fluent-bit/daemonset.yaml`
+- `observability-plane/fluent-bit/config/fluent-bit.conf`
+- `observability-plane/fluent-bit/config/drop_noise.lua`
+- `observability-plane/fluent-bit/config/enrich_audit.lua`
+- `observability-plane/fluent-bit/networkpolicy.yaml`
+
+**Validation:**
+```bash
+# Logs appear in Loki within 2 seconds
+# Health check logs filtered out
+# Audit logs appear in NATS subject obs.audit.control
+```
+
+#### **Task OP-4: Loki Log Aggregation (S3 Backend + Retention)**
+**Objective:** Lightweight log storage with S3-compatible backend and tiered retention.
+
+**Sub-tasks:**
+- Deploy Loki in single-binary mode (not distributed)
+- Storage: BoltDB shipper with MinIO backend (bucket `observability-logs`)
+- Retention: 7 days hot (local), 30 days in MinIO (via compaction)
+- Index: Table manager with 24h rotation
+- Query limits: Max 30 days, max 1000 lines per query
+- **Backup**: Enable MinIO versioning on `observability-logs` bucket
+- **NetworkPolicy**: Restrict ingress to Fluent Bit and Grafana only
+
+**Deliverables:**
+- `observability-plane/loki/statefulset.yaml` (20GB PVC for index)
+- `observability-plane/loki/config.yaml`
+- `observability-plane/loki/networkpolicy.yaml`
+
+**Validation:**
+```bash
+curl 'http://loki:3100/loki/api/v1/query?query={plane="control"}'  # returns recent logs
+# MinIO bucket shows versioned objects
+```
+
+#### **Task OP-5: Alerting & SLOs (Burn-Rate + Inhibition)**
+**Objective:** Burn-rate alerting for critical services with intelligent routing.
+
+**Sub-tasks:**
+- Deploy vmalert with recording/alerting rules
+- Deploy Alertmanager with routing:
+  - Critical (Control Plane down, NATS quorum loss) → Webhook/PagerDuty
+  - Warning (High latency, queue depth >80%) → Slack/Email
+  - Info → Log only
+- Configure inhibition (e.g., NodeDown inhibits DiskFull; SPIREDown inhibits mTLS alerts)
+- Grafana dashboards:
+  - "5-Plane Health Overview"
+  - "Resource Budget Tracker" (16GB utilization)
+  - "Temporal Workflow Metrics"
+  - "NATS JetStream Monitoring"
+  - "Backpressure Dashboard" (queue depths, replication lag)
+- **Alert validation**: Test alerts via `vmalert -rule.test`
+
+**Deliverables:**
+- `observability-plane/alerting/vmalert-deployment.yaml`
+- `observability-plane/alerting/alertmanager-config.yaml`
+- `observability-plane/alerting/rules/control-plane.yaml`
+- `observability-plane/alerting/rules/data-plane.yaml`
+- `observability-plane/alerting/rules/backpressure.yaml`
+- `observability-plane/grafana/dashboards/` (JSON files including backpressure dashboard)
+
+**Validation:**
+```bash
+curl vmalert:8880/api/v1/alerts  # shows active alerts if any
+# Inhibition rules prevent alert storms
+```
+
+### 6.3 Observability Plane Success Criteria (GATE 4)
+
+| Criterion | Metric | Validation Method |
+|-----------|--------|-------------------|
+| **Log Latency** | <2s end-to-end | Timestamp in app vs timestamp in Loki difference <2s |
+| **Metric Cardinality** | <50k series; alert on >45k | `api/v1/series/count` < 50,000; alert triggers at 45k |
+| **Log Filtering** | 90% noise reduction | Count of health check logs in Loki <10% of total |
+| **Query Performance** | <1s dashboard load | Grafana "5-Plane Health" loads in <1s |
+| **Agent Coverage** | 100% nodes; egress restricted | `kubectl get ds fluent-bit` shows 3/3 ready; NetworkPolicy blocks unauthorized egress |
+| **Alerting** | <1% false positive; inhibition functional | Alertmanager history review over 7 days; test inhibition rules |
+| **Backup Integrity** | VictoriaMetrics snapshots hourly; Loki versioned | MinIO bucket shows hourly snapshots; `mc ls` shows versioned log objects |
+
+---
+
+## 7. Cross-Plane Integration & Dependencies
+
+### 7.1 Interface Matrix (Enhanced with Egress)
+
+| Source | Target | Protocol | Purpose | Authentication | Egress Policy |
+|--------|--------|----------|---------|----------------|---------------|
+| **Control** (Temporal) | **Data** (PostgreSQL) | PostgreSQL wire | Workflow persistence | mTLS + password | Allow only to PostgreSQL primary/replica |
+| **Control** (SPIRE) | **Data** (PostgreSQL) | PostgreSQL | SVID storage | mTLS | Allow only to PostgreSQL |
+| **All Planes** | **Data** (NATS) | NATS client | Event bus | TLS + JWT | Allow only to NATS cluster |
+| **Observability** (Fluent Bit) | **Data** (NATS) | NATS | Audit log shipping | TLS | Allow only to NATS |
+| **All Planes** | **Data** (MinIO) | S3 API | Object storage | HMAC-SHA256 | Allow only to MinIO |
+| **All Planes** | **Observability** (vmagent) | HTTP/metrics | Metrics scraping | mTLS (optional) | Allow only to vmagent |
+| **Observability** (vmagent) | **Observability** (VMSingle) | HTTP/remote-write | TSDB ingestion | Basic auth | Allow only to VMSingle |
+| **Observability** (Fluent Bit) | **Observability** (Loki) | HTTP/logs | Log aggregation | None (namespace-scoped) | Allow only to Loki |
+
+### 7.2 Network Policies (Complete with Egress)
+
+**File:** `shared/network-policies.yaml`
+
+```yaml
+# Control Plane ingress + egress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: temporal-full-isolation
+  namespace: control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: temporal-server
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          plane: execution
+    ports:
+    - protocol: TCP
+      port: 7233
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: data
+    ports:
+    - protocol: TCP
+      port: 5432  # PostgreSQL
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: control
+    ports:
+    - protocol: TCP
+      port: 8443  # SPIRE SDS
+---
+# Data Plane isolation (PostgreSQL example)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgresql-full-isolation
+  namespace: data-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresql
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          plane: control
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          plane: data
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: data
+    ports:
+    - protocol: TCP
+      port: 5432  # Replica sync
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: observability
+    ports:
+    - protocol: TCP
+      port: 9187  # Exporter
+---
+# Observability egress restrictions (Fluent Bit example)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fluent-bit-egress-restricted
+  namespace: observability-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: fluent-bit
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: data
+    ports:
+    - protocol: TCP
+      port: 4222  # NATS for audit
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: observability
+    ports:
+    - protocol: TCP
+      port: 3100  # Loki
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          plane: observability
+    ports:
+    - protocol: TCP
+      port: 8428  # VMSingle
+```
+
+### 7.3 Priority Classes (Tiered)
+
+**File:** `shared/priority-classes.yaml`
+
+```yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: foundation-critical
+value: 1000000
+globalDefault: false
+description: "Critical foundation services: PostgreSQL, NATS, Temporal"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: foundation-high
+value: 900000
+globalDefault: false
+description: "High-priority foundation: Kyverno, SPIRE, MinIO"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: foundation-medium
+value: 800000
+globalDefault: false
+description: "Medium-priority foundation: Observability components"
+```
+
+---
+
+## 8. Validation & Testing Framework
+
+### 8.1 Pre-Phase Validation Scripts (Enhanced)
+
+```bash
+#!/bin/bash
+# scripts/validate-phase-gates.sh
+
+set -e
+
+validate_gate_0() {
+  echo "🔒 Validating Phase 0: Budget Scaffolding..."
+  kubectl get priorityclass foundation-critical foundation-high foundation-medium >/dev/null 2>&1 || { echo "❌ PriorityClasses missing"; exit 1; }
+  kubectl get resourcequota -n control-plane data-plane observability-plane >/dev/null 2>&1 || { echo "❌ ResourceQuotas missing"; exit 1; }
+  kubectl get storageclass nvme-waitfirst -o jsonpath='{.volumeBindingMode}' | grep -q WaitForFirstConsumer || { echo "❌ StorageClass misconfigured"; exit 1; }
+  [ $(kubectl get nodes -l node-role=storage-heavy --no-headers | wc -l) -ge 2 ] || { echo "❌ Insufficient storage-heavy nodes"; exit 1; }
+  echo "✅ Gate 0 passed"
+}
+
+validate_gate_1() {
+  echo "🔒 Validating Phase 1: Shared Foundations..."
+  kubectl get pods -n control-plane -l app=spire-server -o jsonpath='{.items[0].status.phase}' | grep -q Running || { echo "❌ SPIRE not ready"; exit 1; }
+  kubectl auth can-i create pod --as=system:serviceaccount:default:default --namespace=control-plane | grep -q no || { echo "❌ RBAC not restrictive"; exit 1; }
+  echo "✅ Gate 1 passed"
+}
+
+# Add validate_gate_2, validate_gate_3, validate_gate_4 similarly
+
+case "${1:-all}" in
+  0) validate_gate_0 ;;
+  1) validate_gate_1 ;;
+  2) validate_gate_2 ;;
+  3) validate_gate_3 ;;
+  4) validate_gate_4 ;;
+  all) validate_gate_0 && validate_gate_1 && validate_gate_2 && validate_gate_3 && validate_gate_4 ;;
+  *) echo "Usage: $0 {0|1|2|3|4|all}"; exit 1 ;;
+esac
+```
+
+### 8.2 Runtime Validation Script
+**File:** `scripts/validate-runtime.sh`
+
+Checks:
+- Temporal health (`tctl cluster health`) + 2 replicas Ready
+- Kyverno policy enforcement + rate limiting active
+- NATS cluster health (`nats server list` = 3) + quorum test
+- PostgreSQL RLS (cross-tenant query test) + read replica routing
+- Fluent Bit coverage (DaemonSet 3/3) + egress restrictions
+- VictoriaMetrics cardinality (<50k series) + snapshot backup running
+- Topology spread (no node has >2 foundation-critical pods)
+- MinIO replication lag <5 minutes
+- SPIRE SVID issuance latency <5s
+
+### 8.3 Chaos Testing Scenarios (Expanded)
+**File:** `scripts/chaos-foundation.yaml` (LitmusChaos)
+
+Scenarios:
+- **Pod Delete**: Temporal (validate 2nd replica takes over), NATS (kill 1, validate quorum), PostgreSQL primary (validate replica promotion)
+- **Network Latency**: 200ms latency to NATS (validate timeout handling + backpressure alerts)
+- **Memory Pressure**: 400MB memory hog on database node (validate eviction priority: foundation-critical pods protected)
+- **Disk Full**: Simulate 90% disk usage on PostgreSQL node (validate alerting + graceful degradation)
+- **SPIRE Server Restart**: Validate fallback mode activates, SVID issuance continues via cert-manager
+- **MinIO Unavailable**: Validate application continues with local cache, replication resumes on recovery
+- **Phase 0 Resilience**: Apply memory pressure; verify foundation-critical pods NOT evicted before foundation-medium
+
+### 8.4 Backpressure Validation
+**File:** `scripts/test-backpressure.sh`
+
+Tests:
+- Flood NATS with 10k messages/second → validate queue depth alert triggers
+- Simulate slow PostgreSQL → validate pgBouncer queueing, application backoff
+- Overload API server with 100 pod creations/second → validate Kyverno rate limiting
+
+---
+
+## 9. Deliverables Summary
+
+### Repository Structure (Sequence-Aware)
+```
+docintel-platform/
+├── README.md
+├── IMPLEMENTATION_SEQUENCE.md          # NEW: Executive summary of deployment order
+├── kustomization.yaml                  # Root aggregator
+├── scripts/
+│   ├── validate-phase-gates.sh         # NEW: Gate validation script
+│   ├── validate-pre-deploy.sh          # Updated to call gate validator
+│   ├── validate-runtime.sh
+│   ├── test-backpressure.sh
+│   ├── chaos-foundation.yaml
+│   └── lib/
+│       ├── resource-checks.sh
+│       ├── network-checks.sh
+│       ├── ha-checks.sh
+│       ├── backpressure-checks.sh
+│       └── sequence-checks.sh          # NEW: Verify deployment order
+├── phase-0-budget-scaffolding/         # NEW: Dedicated directory
+│   ├── kustomization.yaml
+│   ├── priority-classes.yaml
+│   ├── resource-quotas.yaml
+│   ├── limit-ranges.yaml
+│   ├── storage-classes.yaml
+│   ├── node-labeling.sh
+│   └── network-policy-template.yaml
+├── phase-1-shared-foundations/
+│   ├── kustomization.yaml
+│   ├── pki/
+│   ├── rbac/
+│   └── network-policies/
+├── control-plane/                      # Now Phase 3
+│   ├── kustomization.yaml
+│   ├── temporal/
+│   │   ├── temporal-server.yaml        # 2 replicas, anti-affinity
+│   │   ├── pdb.yaml                    # minAvailable: 1
+│   │   ├── networkpolicy.yaml          # ingress+egress
+│   │   ├── service.yaml                # headless + LB
+│   │   └── config/
+│   │       └── dynamicconfig.yaml
+│   ├── kyverno/
+│   │   ├── kustomization.yaml
+│   │   ├── metrics-service.yaml
+│   │   └── policies/
+│   │       ├── require-labels.yaml
+│   │       ├── resource-constraints.yaml
+│   │       ├── security-baseline.yaml
+│   │       └── rate-limit-admission.yaml
+│   ├── spire/
+│   │   ├── server.yaml
+│   │   ├── agent-daemonset.yaml
+│   │   ├── roles.yaml
+│   │   ├── entries.yaml
+│   │   ├── fallback-config.yaml        # cert-manager toggle
+│   │   └── metrics-exporter.yaml
+│   ├── argocd/
+│   │   ├── kustomization.yaml
+│   │   ├── applicationsets/
+│   │   │   └── control-plane.yaml
+│   │   ├── repository-secret.yaml
+│   │   ├── resource-quota.yaml
+│   │   └── argocd-cm.yaml              # parallelism limits
+│   └── nats/
+│       ├── stateless-nats.yaml
+│       └── pdb.yaml
+├── data-plane/                         # Now Phase 2
+│   ├── kustomization.yaml
+│   ├── postgresql/
+│   │   ├── primary-statefulset.yaml
+│   │   ├── replica-statefulset.yaml
+│   │   ├── pgbouncer.yaml              # 500 conn, read/write routing
+│   │   ├── init-scripts/
+│   │   │   ├── 01-rls.sql
+│   │   │   └── 02-tenants.sql
+│   │   ├── migrations/
+│   │   │   └── atlas-config.yaml       # or flyway
+│   │   └── backup-cronjob.yaml
+│   ├── nats/
+│   │   ├── values.yaml                 # 3 replicas, backpressure limits
+│   │   ├── stream-config.yaml
+│   │   ├── networkpolicy.yaml
+│   │   ├── pdb.yaml                    # minAvailable: 2
+│   │   └── metrics-exporter.yaml
+│   ├── minio/
+│   │   ├── statefulset.yaml
+│   │   ├── bucket-job.yaml
+│   │   ├── lifecycle-policy.yaml
+│   │   ├── replication-cronjob.yaml    # mc mirror --watch
+│   │   ├── replication-monitor.yaml    # lag alerting
+│   │   └── pdb.yaml
+│   └── redis/
+│       ├── deployment.yaml
+│       ├── configmap.yaml
+│       └── metrics-alert.yaml
+├── observability-plane/                # Now Phase 4
+│   ├── kustomization.yaml
+│   ├── victoriametrics/
+│   │   ├── statefulset.yaml
+│   │   ├── pdb.yaml
+│   │   ├── recording-rules.yaml
+│   │   ├── networkpolicy.yaml
+│   │   ├── snapshot-cronjob.yaml       # hourly to MinIO
+│   │   └── alerts.yaml                 # cardinality, snapshot failure
+│   ├── vmagent/
+│   │   ├── daemonset.yaml
+│   │   ├── config.yaml
+│   │   └── networkpolicy.yaml          # egress restrictions
+│   ├── fluent-bit/
+│   │   ├── daemonset.yaml
+│   │   ├── config/
+│   │   │   ├── fluent-bit.conf
+│   │   │   ├── drop_noise.lua
+│   │   │   └── enrich_audit.lua
+│   │   └── networkpolicy.yaml
+│   ├── loki/
+│   │   ├── statefulset.yaml
+│   │   ├── config.yaml
+│   │   └── networkpolicy.yaml
+│   ├── alerting/
+│   │   ├── vmalert-deployment.yaml
+│   │   ├── alertmanager-config.yaml
+│   │   ├── rules/
+│   │   │   ├── control-plane.yaml
+│   │   │   ├── data-plane.yaml
+│   │   │   └── backpressure.yaml
+│   │   └── test-alerts.sh
+│   └── grafana/
+│       └── dashboards/
+│           ├── 5-plane-health.json
+│           ├── resource-budget.json
+│           ├── temporal-metrics.json
+│           ├── nats-monitoring.json
+│           └── backpressure-dashboard.json
+└── shared/
+    ├── network-policies.yaml           # complete ingress+egress
+    ├── topology-constraints.yaml       # anti-affinity, node labels
+    ├── priority-classes.yaml           # tiered priorities
+    ├── storage-classes.yaml            # WaitForFirstConsumer
+    ├── interface-matrix.md
+    ├── topology.md
+    ├── resource-budget.md
+    └── rbac-matrix.md
+```
+
+### Documentation Deliverables (Enhanced)
+1. **control-plane-runbook.md** - Temporal recovery (2-replica failover), Kyverno troubleshooting, SPIRE fallback mode activation
+2. **data-plane-runbook.md** - PostgreSQL backup/restore (primary+replica), NATS stream management, MinIO replication lag resolution
+3. **observability-contract.md** - Metric naming conventions, required labels, cardinality limits, snapshot restore procedures
+4. **network-policy-reference.md** - Traffic flow matrix, allowed ports, egress restrictions, testing procedures
+5. **validation-procedures.md** - Step-by-step validation for each gate, chaos testing execution guide
+6. **backpressure-playbook.md** - Queue depth monitoring, circuit breaker configuration, load shedding strategies
+7. **schema-migration-guide.md** - Atlas/Flyway usage, versioning strategy, rollback procedures
+8. **IMPLEMENTATION_SEQUENCE.md** - NEW: Phase-by-phase deployment order with gate checks
+
+---
+
+## 10. Success Gates & Exit Criteria (Sequence-Enforced)
+
+The Foundation Planes are considered **Production Ready** when:
+
+| Gate | Phase | Criteria | Sign-off | Validation Method |
+|------|-------|----------|----------|-------------------|
+| **G0** | Phase 0 | All scaffolding resources applied + validated | Automated | `scripts/validate-phase-gates.sh 0` |
+| **G1** | Phase 1 | PKI + RBAC + NetworkPolicy functional | Automated + Manual | SPIRE SVID test + RBAC audit + network isolation test |
+| **G2** | Phase 2 | Data Plane HA + topology + resource compliance | Manual (chaos) | Kill PostgreSQL primary; verify replica promotion |
+| **G3** | Phase 3 | Control Plane stable + policy-enforced + GitOps synced | Automated + Manual | ArgoCD sync test + Kyverno policy block test |
+| **G4** | Phase 4 | Observability collecting + alerting + cardinality controlled | Automated | Log latency test + series count query + alert firing test |
+| **G5** | Cross-Phase | End-to-end workflow: doc ingest → Temporal → storage → metrics | Manual | Submit test document; verify full pipeline telemetry |
+
+**Exit Criteria:** All gates G0-G5 passed with documented evidence in `validation-reports/`. **Gate 0 is mandatory before any other gate can be attempted.**
+
+---
+
+## 11. Operational Runbooks (Sequence-Aware)
+
+### 11.1 Emergency Procedures
+
+| Scenario | Sequence-Aware Response |
+|----------|------------------------|
+| **Temporal outage** | 1) Verify Phase 0 scaffolding intact (PriorityClasses) 2) Check Data Plane dependencies (PostgreSQL) 3) Scale Temporal replicas |
+| **NATS quorum loss** | 1) Confirm ResourceQuotas not causing eviction 2) Verify topology spread constraints still satisfied 3) Restore 3rd replica |
+| **PostgreSQL primary failure** | 1) Ensure `storage-heavy` labels still correct 2) Promote replica 3) Update connection strings 4) Verify Phase 0 StorageClass still `WaitForFirstConsumer` |
+| **Kyverno blocking legitimate pods** | 1) Check Phase 1 RBAC baseline 2) Review LimitRange defaults 3) Temporarily relax policy via GitOps PR (not kubectl edit) |
+| **Observability silent failure** | 1) Verify Phase 4 deployed after Phase 3 2) Check NetworkPolicy egress rules 3) Validate vmagent scrape targets |
+| **SPIRE failure** | Toggle fallback mode to cert-manager; monitor SVID issuance; restore SPIRE |
+| **MinIO replication lag** | Check network; verify `mc mirror --watch` process; increase resources if needed |
+
+### 11.2 Scaling Guidelines
+
+```yaml
+# When adding Execution/AI planes:
+# 1. FIRST: Re-run Phase 0 validation to ensure headroom
+scripts/validate-phase-gates.sh 0
+
+# 2. THEN: Update ResourceQuotas if needed (GitOps PR)
+# 3. THEN: Deploy new plane with appropriate PriorityClass
+# 4. FINALLY: Update observability dashboards to include new plane
+```
+
+**Scaling Rules:**
+- **Add Execution/AI planes**: Ensure foundation headroom >20%; monitor resource budget dashboard
+- **Increase document volume**: Scale NATS consumers first; then PostgreSQL read replicas; then Temporal workers
+- **Add nodes**: Label new nodes; update topology spread constraints; rebalance stateful workloads
+
+### 11.3 Upgrade Procedures
+
+| Component | Sequence Consideration |
+|-----------|----------------------|
+| **K3s upgrade** | Drain nodes respecting PriorityClasses; foundation-critical pods evicted last |
+| **PostgreSQL upgrade** | Upgrade replica first; ensure StorageClass still `WaitForFirstConsumer` for new PVCs |
+| **Kyverno policy update** | Test in staging with Phase 0 ResourceQuotas; use GitOps PR workflow |
+| **Observability component upgrade** | Upgrade vmagent before VictoriaMetrics; ensure cardinality limits still enforced |
+| **Schema migrations** | Run Atlas/Flyway in dry-run mode first; backup before applying; monitor application logs |
+
+---
+
+## Appendix A: "What If I Skip the Sequence?" - Risk Matrix
+
+| Skipped Phase | Immediate Consequence | Latent Risk | Recovery Complexity |
+|--------------|----------------------|-------------|-------------------|
+| **Phase 0: Budget Scaffolding** | Pods schedule without limits; resource contention within hours | Silent OOM kills; cascade failures during load spikes | High: Must drain nodes, re-apply quotas, restart workloads |
+| **Phase 1: Shared Foundations** | mTLS failures; unauthorized cross-plane traffic | Security boundary breach; audit gap | Medium: Re-deploy PKI; rotate credentials; audit access logs |
+| **Phase 2 before Phase 3** | Temporal crashes waiting for PostgreSQL; workflow loss | Data corruption if partial writes occur | Medium: Restore from backup; replay workflows |
+| **Phase 4 before Phase 3** | Observability agents scrape non-existent targets; metric cardinality explosion | Alert fatigue; missed critical signals | Low: Reconfigure scrapes; reset cardinality limits |
+
+---
+
+## Appendix B: Iterative Development Tip
+
+You don't need *perfect* budget numbers on day one. Start conservative and iterate:
+
+```yaml
+# Start with buffer, then tighten after load testing
+resources:
+  requests:
+    memory: "750Mi"  # Start 25% above spec
+  limits:
+    memory: "1Gi"    # Allow burst headroom
+```
+
+Then use observability data to right-size:
+```bash
+# After 7 days of production load:
+kubectl top pods -n data-plane --containers
+# Adjust requests/limits to p95 usage + 20% buffer
+# Update Phase 0 ResourceQuotas via GitOps PR
+```
+
+**Key**: Even with iterative tuning, Phase 0 scaffolding must exist *before* workloads deploy. You can adjust the numbers later via GitOps, but the guardrails must be in place from day one.
+
+---
+
+**End of Specification v4.0.4 (Sequence-Aware, Production-Hardened)**
+
+> This hardened, sequence-aware specification ensures that resource constraints are enforced at the Kubernetes scheduler level before any workload can bypass them. All original technical specifications, tasks, deliverables, success criteria, and operational procedures from v4.0.4 have been preserved and enhanced with mandatory implementation sequencing. The 30 minutes spent deploying Phase 0 scaffolding upfront saves hours of debugging resource contention, eviction storms, or silent failures later. Treat the resource budget as infrastructure-as-code that must be applied *before* workloads—it's the foundation that makes "resource frugality" enforceable, not just aspirational.

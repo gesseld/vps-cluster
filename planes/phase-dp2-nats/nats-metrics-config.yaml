@@ -1,0 +1,64 @@
+# NATS Metrics Exporter Configuration for VictoriaMetrics
+# Exports NATS JetStream metrics to VictoriaMetrics
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-metrics-config
+  namespace: data-plane
+data:
+  nats-metrics.yaml: |
+    # NATS JetStream metrics for VictoriaMetrics
+    # This configuration scrapes NATS metrics and formats them for VictoriaMetrics
+    
+    groups:
+      - name: nats_jetstream
+        interval: 30s
+        metrics:
+          - nats_jetstream_bytes
+          - nats_jetstream_messages
+          - nats_jetstream_streams
+          - nats_jetstream_consumers
+          - nats_jetstream_store_bytes
+          - nats_jetstream_memory_bytes
+          - nats_jetstream_domain
+          
+      - name: nats_server
+        interval: 30s
+        metrics:
+          - nats_server_up
+          - nats_server_version
+          - nats_server_connections
+          - nats_server_total_connections
+          - nats_server_memory_bytes
+          - nats_server_cpu_percent
+          
+      - name: nats_health
+        interval: 15s
+        metrics:
+          - nats_healthz_status
+
+---
+# VMAgent configuration to scrape NATS metrics
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vmagent-nats-scrape
+  namespace: data-plane
+data:
+  vmagent.yaml: |
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+    
+    scrape_configs:
+      - job_name: 'nats-jetstream'
+        static_configs:
+          - targets:
+              - 'nats-0.nats-headless.data-plane.svc.cluster.local:8222'
+            labels:
+              cluster: 'k3s-vps'
+              namespace: 'data-plane'
+              service: 'nats'
+        metrics_path: '/jsz'
+        scheme: 'http'

@@ -1,0 +1,57 @@
+# ResourceQuotas for foundation namespaces
+# Enforces namespace-level resource budgets per BS-2 task
+
+---
+# Control Plane Namespace ResourceQuota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: control-plane-quota
+  namespace: control-plane
+spec:
+  hard:
+    requests.memory: "2.8Gi"
+    limits.memory: "4.2Gi"
+    requests.cpu: "1.8"
+    limits.cpu: "3.2"
+    pods: "15"
+    services: "10"
+    configmaps: "50"
+    secrets: "50"
+    persistentvolumeclaims: "5"
+---
+# Data Plane Namespace ResourceQuota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: data-plane-quota
+  namespace: data-plane
+spec:
+  hard:
+    requests.memory: "3.2Gi"
+    limits.memory: "4.8Gi"
+    requests.cpu: "2.4"
+    limits.cpu: "4.0"
+    pods: "20"
+    services: "15"
+    configmaps: "100"
+    secrets: "100"
+    persistentvolumeclaims: "10"
+---
+# Observability Plane Namespace ResourceQuota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: observability-plane-quota
+  namespace: observability-plane
+spec:
+  hard:
+    requests.memory: "1.6Gi"
+    limits.memory: "2.4Gi"
+    requests.cpu: "1.2"
+    limits.cpu: "2.0"
+    pods: "10"
+    services: "8"
+    configmaps: "30"
+    secrets: "30"
+    persistentvolumeclaims: "3"

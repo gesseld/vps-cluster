@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nats-jetstream-pv
+  labels:
+    app: nats
+    component: jetstream-storage
+spec:
+  storageClassName: hcloud-volumes
+  volumeMode: Filesystem
+  capacity:
+    storage: 15Gi
+  accessModes:
+    - ReadWriteOnce
+  csi:
+    driver: csi.hetzner.cloud
+    volumeHandle: volume-oNmhESB6bgWXBdNorJ6p0iCW8ZoTz0eFkjxnz85N1bGgApJapD5Eip4L0GdlTT5V

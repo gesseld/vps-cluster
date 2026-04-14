@@ -1,0 +1,26 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: spire-ca
+  namespace: spire
+spec:
+  secretName: spire-ca
+  duration: 8760h # 1 year
+  renewBefore: 720h # 30 days
+  commonName: spire-ca
+  isCA: true
+  usages:
+    - digital signature
+    - key encipherment
+    - cert sign
+    - crl sign
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer

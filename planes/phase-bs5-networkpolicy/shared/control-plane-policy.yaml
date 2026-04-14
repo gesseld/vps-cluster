@@ -1,0 +1,64 @@
+# BS-5 NetworkPolicy: Control Plane Isolation
+# This policy isolates control plane components and allows only necessary traffic
+# Apply to: kube-system, monitoring, logging namespaces
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-plane-isolation
+  namespace: {{ .Namespace }}
+  labels:
+    policy-type: plane-isolation
+    plane: control
+    managed-by: bs5-networkpolicy
+spec:
+  podSelector:
+    matchLabels:
+      # This should match your control plane component labels
+      # Adjust based on your actual labeling strategy
+      plane: control
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules: Allow traffic from:
+  # - API server (for all components)
+  # - Other control plane components
+  # - Monitoring agents
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          component: kube-apiserver
+  
+  # Egress rules: Allow traffic to:
+  # - API server
+  # - etcd
+  # - DNS services
+  # - Monitoring endpoints
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 6443  # API server
+    - protocol: TCP
+      port: 2379  # etcd client
+    - protocol: TCP
+      port: 2380  # etcd peer
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53

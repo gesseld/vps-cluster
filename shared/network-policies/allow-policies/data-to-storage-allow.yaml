@@ -1,0 +1,21 @@
+# Data Plane to Storage Allow Rules
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-data-to-storage
+  namespace: data-plane
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - ports:
+    - port: 9000
+      protocol: TCP
+    - port: 9001
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: storage
+      podSelector: {}

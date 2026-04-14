@@ -1,0 +1,13 @@
+spec:
+  volumeClaimTemplates:
+    - metadata:
+        name: jetstream
+        labels:
+          app: nats
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: hcloud-volumes
+        resources:
+          requests:
+            storage: 15Gi

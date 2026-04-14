@@ -1,0 +1,17 @@
+# Applied default-deny NetworkPolicy for networkpolicy-test
+# Generated from template at Sat Apr 11 08:03:20 SAWST 2026
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: networkpolicy-test
+  labels:
+    policy-type: baseline
+    managed-by: bs5-networkpolicy
+    created: "2026-04-11T08:03:20-04:00"
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress

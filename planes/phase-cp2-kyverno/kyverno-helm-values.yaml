@@ -1,0 +1,107 @@
+# Kyverno Helm values for HA deployment
+replicaCount: 2
+
+image:
+  repository: ghcr.io/kyverno/kyverno
+  tag: v1.11.0
+  pullPolicy: IfNotPresent
+
+initImage:
+  repository: ghcr.io/kyverno/kyvernopre
+  tag: v1.11.0
+  pullPolicy: IfNotPresent
+
+# Resource configuration
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# HA configuration
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+podAntiAffinity:
+  enabled: true
+  type: preferred
+
+# Admission controller settings
+admissionController:
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Background controller settings  
+backgroundController:
+  replicas: 1
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Cleanup controller settings
+cleanupController:
+  replicas: 1
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Reports controller settings
+reportsController:
+  replicas: 1
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Metrics configuration
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false  # Set to true if using Prometheus Operator
+  port: 8000
+
+# Webhook configuration
+webhookTimeout: 10
+failurePolicy: Fail
+
+# Resource filters
+resourceFilters:
+  - "[*,kyverno,*]"
+  - "[Event,*,*]"
+  - "[*,kube-system,*]"
+  - "[*,kube-public,*]"
+  - "[*,kube-node-lease,*]"
+  - "[Node,*,*]"
+  - "[APIService,*,*]"
+  - "[TokenReview,*,*]"
+  - "[SubjectAccessReview,*,*]"
+
+# Exclude system accounts
+excludeGroupRole:
+  - system:nodes
+  - system:kube-scheduler
+  - system:kube-controller-manager
+  - system:serviceaccount:kube-system:generic-garbage-collector
+  - system:serviceaccount:kube-system:clusterrole-aggregation-controller
+
+# Generate events
+generateSuccessEvents: false
+
+# TLS configuration
+tls:
+  autoGenerate: true
+
+# Network policy
+networkPolicy:
+  enabled: false  # Set to true if using network policies
+
+# Pod security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10000
+  runAsGroup: 10000
+  fsGroup: 10000

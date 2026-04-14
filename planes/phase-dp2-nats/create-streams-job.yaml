@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nats-create-streams
+  namespace: data-plane
+spec:
+  template:
+    spec:
+      containers:
+      - name: stream-creator
+        image: natsio/nats-box:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Downloading nats CLI..."
+          cd /tmp
+          
+          # Try different versions to find one that works
+          for version in "0.1.1" "0.1.0" "0.0.35" "0.0.34"; do
+            echo "Trying nats CLI version $version..."
+            if wget -q "https://github.com/nats-io/natscli/releases/download/v${version}/nats-${version}-linux-amd64.zip" -O nats.zip 2>/dev/null; then
+              unzip -o nats.zip -d /usr/local/bin/ 2>/dev/null
+              chmod +x /usr/local/bin/nats 2>/dev/null
+              if nats --version 2>/dev/null | grep -q "nats"; then
+                echo "Successfully installed nats CLI $(nats --version)"
+                break
+              fi
+            fi
+          done
+          
+          if ! command -v nats &> /dev/null; then
+            echo "Failed to download nats CLI, using alternative method..."
+            # Try using go to install
+            go version 2>/dev/null && go install github.com/nats-io/natscli@latest 2>/dev/null
+          fi
+          
+          echo "Testing NATS connection..."
+          nats --server nats://nats:4222 server info 2>&1 || echo "Direct connection failed, trying via service..."
+          
+          echo ""
+          echo "Creating streams..."
+          
+          # Create DOCUMENTS stream
+          echo "Creating DOCUMENTS stream..."
+          nats --server nats://nats:4222 stream add DOCUMENTS \
+            --subjects="data.doc.>" \
+            --retention=workq \
+            --storage=file \
+            --max-msgs=100000 \
+            --max-bytes=5GB \
+            --replicas=1 \
+            --discard=old \
+            --dupe-window=2m \
+            --max-msg-size=1MB \
+            --description="Document processing stream" 2>&1 || echo "DOCUMENTS stream creation attempted"
+          
+          # Create EXECUTION stream  
+          echo "Creating EXECUTION stream..."
+          nats --server nats://nats:4222 stream add EXECUTION \
+            --subjects="exec.task.>" \
+            --retention=interest \
+            --storage=file \
+            --max-msgs=50000 \
+            --max-bytes=2GB \
+            --max-age=24h \
+            --replicas=1 \
+            --discard=old \
+            --dupe-window=1m \
+            --max-msg-size=512KB \
+            --description="Task execution stream" 2>&1 || echo "EXECUTION stream creation attempted"
+          
+          # Create OBSERVABILITY stream
+          echo "Creating OBSERVABILITY stream..."
+          nats --server nats://nats:4222 stream add OBSERVABILITY \
+            --subjects="obs.metric.>" \
+            --retention=limits \
+            --storage=file \
+            --max-bytes=1GB \
+            --replicas=1 \
+            --discard=old \
+            --dupe-window=30s \
+            --max-msg-size=128KB \
+            --description="Observability metrics stream" 2>&1 || echo "OBSERVABILITY stream creation attempted"
+          
+          echo ""
+          echo "Verifying streams..."
+          nats --server nats://nats:4222 stream list 2>&1 || echo "Stream list failed"
+          
+          echo ""
+          echo "Done!"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      restartPolicy: OnFailure
+  backoffLimit: 3

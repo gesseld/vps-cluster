@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-test
+  namespace: control-plane
+  labels:
+    app: temporal-test
+    component: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal-test
+      component: server
+  template:
+    metadata:
+      labels:
+        app: temporal-test
+        component: server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: temporal-server
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: temporal
+        image: temporalio/server:1.25.0
+        imagePullPolicy: IfNotPresent
+        
+        # Resource allocation
+        resources:
+          requests:
+            memory: "750Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        
+        # Port configuration
+        ports:
+        - name: frontend
+          containerPort: 7233
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        
+        # Minimal environment variables
+        env:
+        - name: SERVICES
+          value: "frontend,history,matching"
+        - name: SQL_PLUGIN
+          value: "postgres12"
+        - name: DB
+          value: "postgresql"
+        - name: DB_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: temporal-postgres-creds
+              key: username
+        - name: POSTGRES_PWD
+          valueFrom:
+            secretKeyRef:
+              name: temporal-postgres-creds
+              key: password
+        - name: POSTGRES_SEEDS
+          valueFrom:
+            secretKeyRef:
+              name: temporal-postgres-creds
+              key: host
+        - name: SKIP_DEFAULT_NAMESPACE_CREATION
+          value: "true"
+        - name: LOG_LEVEL
+          value: "debug"  # Debug for troubleshooting
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: metrics
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 5

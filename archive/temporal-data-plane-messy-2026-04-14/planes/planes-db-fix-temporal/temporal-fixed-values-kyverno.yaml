@@ -1,0 +1,116 @@
+# Temporal Helm values with Kyverno policy compliance
+elasticsearch:
+  enabled: false
+
+grafana:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+prometheus:
+  enabled: false
+
+server:
+  config:
+    persistence:
+      default:
+        sql:
+          connectAddr: postgresql-primary:5432
+          databaseName: temporal
+          password: temporal
+          user: temporal
+      visibility:
+        sql:
+          connectAddr: postgresql-primary:5432
+          databaseName: temporal_visibility
+          password: temporal
+          user: temporal
+  replicaCount: 1
+
+web:
+  enabled: false
+
+# Kyverno Policy Compliance
+global:
+  commonLabels:
+    plane: data
+    tenant: temporal-tenant
+
+# Resource limits for all containers
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 200m
+    memory: 512Mi
+
+# Security context for non-root execution
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  readOnlyRootFilesystem: true
+
+# Component-specific overrides
+admintools:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+
+frontend:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+history:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+matching:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+worker:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+# Schema job configuration
+schema:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    readOnlyRootFilesystem: true
