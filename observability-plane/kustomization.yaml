@@ -1,0 +1,23 @@
+# Phase 4: Observability Plane
+# Telemetry collection: metrics, logs, alerting
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - resourcequota.yaml
+  - victoriametrics/
+  - vmagent/
+  - fluent-bit/
+  - loki/
+  - alerting/
+
+# Deployment order within Observability Plane:
+# 1. VictoriaMetrics (metrics storage)
+# 2. vmagent (metrics collection)
+# 3. Fluent Bit (log collection)
+# 4. Loki (log storage)
+# 5. Alerting + Grafana (visualization)
+
+# Dependencies: Requires Phase 3 (Control Plane)
+# Deployed last to avoid self-monitoring bootstrap issues
