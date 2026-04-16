@@ -1,0 +1,17 @@
+groups:
+- name: control-plane-alerts
+  rules:
+  - alert: KubeAPIDown
+    expr: up{job="kubernetes-apiservers"} == 0
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Kubernetes API is down"
+  - alert: APIHighLatency
+    expr: histogram_quantile(0.99, sum(rate(apiserver_request_duration_seconds_bucket[5m])) by (le)) > 1
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Kubernetes API Server high latency"
