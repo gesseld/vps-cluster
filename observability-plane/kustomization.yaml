@@ -11,6 +11,7 @@ resources:
   - fluent-bit/
   - loki/
   - alerting/
+  - grafana/
 
 # Deployment order within Observability Plane:
 # 1. VictoriaMetrics (metrics storage)

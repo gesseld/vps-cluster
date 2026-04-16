@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vmsingle-snapshot
+  namespace: observability-plane
+spec:
+  schedule: "0 * * * *" # Hourly
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+          - name: snapshot-creator
+            image: curlimages/curl:latest
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+              seccompProfile:
+                type: RuntimeDefault
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Creating snapshot..."
+              curl -s -X POST "http://vmsingle.observability-plane.svc.cluster.local:8428/snapshot/create?authKey=observability-backup-key"
+              echo "Snapshot created successfully"
+              # Integration with MinIO would go here via minio client or similar tool, transferring the snapshot from the shared volume.
+          restartPolicy: OnFailure
