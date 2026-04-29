@@ -2,30 +2,28 @@ apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: data-plane-appset
-  namespace: argocd
+  namespace: dip-control-infra
 spec:
   generators:
     - git:
-        repoURL: https://github.com/argoproj/argocd-example-apps.git
-        revision: main
+        repoURL: https://github.com/gesseld/vps-cluster.git
+        revision: master
         directories:
-          - path: data-plane/*
+          - path: planes/phase-dp*
     
   template:
     metadata:
       name: '{{path.basename}}'
-      namespace: argocd
+      namespace: dip-control-infra
       labels:
         plane: data
-        app.kubernetes.io/part-of: data-plane
-        argocd.argoproj.io/instance: data-plane
     
     spec:
       project: default
       
       source:
-        repoURL: https://github.com/argoproj/argocd-example-apps.git
-        targetRevision: main
+        repoURL: https://github.com/gesseld/vps-cluster.git
+        targetRevision: master
         path: '{{path}}'
       
       destination:
@@ -33,11 +31,7 @@ spec:
         namespace: '{{path.basename}}'
       
       syncPolicy:
-        automated:
-          prune: true
-          selfHeal: true
-          allowEmpty: false
-        
+        # manual initially for stateful workloads
         syncOptions:
           - CreateNamespace=true
           - PruneLast=true

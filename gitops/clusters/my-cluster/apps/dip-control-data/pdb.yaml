@@ -1,0 +1,17 @@
+# CP-5: Control Plane NATS - PodDisruptionBudget
+# Ensures at least one NATS instance remains available during voluntary disruptions
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nats-stateless-pdb
+  namespace: control-plane
+  labels:
+    app: nats-stateless
+    component: nats
+    plane: control
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nats-stateless

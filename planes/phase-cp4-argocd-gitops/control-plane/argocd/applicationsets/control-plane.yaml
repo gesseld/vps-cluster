@@ -2,36 +2,30 @@ apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: control-plane-appset
-  namespace: argocd
+  namespace: dip-control-infra
 spec:
   generators:
     - git:
-        repoURL: https://github.com/argoproj/argocd-example-apps.git
-        revision: main
+        repoURL: https://github.com/gesseld/vps-cluster.git
+        revision: master
         directories:
-          - path: control-plane/*
+          - path: planes/phase-cp*
+          - path: planes/phase-op*
     
   template:
     metadata:
       name: '{{path.basename}}'
-      namespace: argocd
+      namespace: dip-control-infra
       labels:
-        plane: control
-        app.kubernetes.io/part-of: control-plane
-        argocd.argoproj.io/instance: control-plane
+        plane: control-infra
     
     spec:
       project: default
       
       source:
-        repoURL: https://github.com/argoproj/argocd-example-apps.git
-        targetRevision: main
+        repoURL: https://github.com/gesseld/vps-cluster.git
+        targetRevision: master
         path: '{{path}}'
-        
-        # Enable helm if needed
-        # helm:
-        #   valueFiles:
-        #     - values.yaml
       
       destination:
         server: https://kubernetes.default.svc
@@ -39,7 +33,7 @@ spec:
       
       syncPolicy:
         automated:
-          prune: true
+          prune: false
           selfHeal: true
           allowEmpty: false
         

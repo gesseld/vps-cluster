@@ -2,30 +2,37 @@ apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: security-plane-appset
-  namespace: argocd
+  namespace: dip-control-infra
 spec:
   generators:
     - git:
-        repoURL: https://github.com/argoproj/argocd-example-apps.git
-        revision: main
+        repoURL: https://github.com/gesseld/vps-cluster.git
+        revision: master
         directories:
-          - path: security/*
+          - path: planes/phase-cp2-kyverno
+          - path: planes/phase-ory-zero-trust-deploy
+          - path: planes/phase-sf*
     
   template:
     metadata:
       name: '{{path.basename}}'
-      namespace: argocd
+      namespace: dip-control-infra
       labels:
         plane: security
-        app.kubernetes.io/part-of: security-plane
-        argocd.argoproj.io/instance: security-plane
     
     spec:
       project: default
       
+      ignoreDifferences:
+        - group: ""
+          kind: Secret
+          jsonPointers:
+            - /data
+            - /stringData
+      
       source:
-        repoURL: https://github.com/argoproj/argocd-example-apps.git
-        targetRevision: main
+        repoURL: https://github.com/gesseld/vps-cluster.git
+        targetRevision: master
         path: '{{path}}'
       
       destination:
@@ -43,6 +50,7 @@ spec:
           - PruneLast=true
           - RespectIgnoreDifferences=true
           - Validate=true  # Extra validation for security components
+          - IgnoreExtraneous=true
         
         retry:
           limit: 2  # Lower retry for security (fail fast)
