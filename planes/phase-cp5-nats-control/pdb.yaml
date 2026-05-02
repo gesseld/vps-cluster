@@ -5,7 +5,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: nats-stateless-pdb
-  namespace: control-plane
+  namespace: dip-control-infra
   labels:
     app: nats-stateless
     component: nats
