@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backup-system
+  labels:
+    plane: data
+    tenant: infrastructure
+    component: backup
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: backup-system-quota
+  namespace: backup-system
+  labels:
+    plane: data
+    component: backup
+spec:
+  hard:
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "1"
+    limits.memory: "2Gi"
+    pods: "5"
+    persistentvolumeclaims: "2"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: backup-system-limits
+  namespace: backup-system
+  labels:
+    plane: data
+    component: backup
+spec:
+  limits:
+  - default:
+      cpu: "200m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "50m"
+      memory: "64Mi"
+    type: Container

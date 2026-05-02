@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: business-invariants
+  namespace: backup-system
+  labels:
+    app: validator
+    component: invariants
+    plane: data
+data:
+  invariants.sql: |
+    -- Business Invariant Queries
+    -- Expected baseline values stored here, compared during validation cycles
+
+    -- 1. Processed document count (critical tenant)
+    SELECT COUNT(*) AS processed_count FROM document_registry WHERE status = 'processed';
+
+    -- 2. Total document registry size
+    SELECT COUNT(*) AS total_documents FROM document_registry;
+
+    -- 3. Critical tenant storage usage
+    SELECT COALESCE(SUM(size_bytes), 0) AS critical_tenant_bytes
+    FROM documents WHERE tenant_id = 'critical-tenant';
+
+    -- 4. Unique user export activity
+    SELECT COUNT(DISTINCT user_id) AS unique_exporters
+    FROM audit_log WHERE action = 'export';
+
+    -- 5. Pending processing queue
+    SELECT COUNT(*) AS pending_documents
+    FROM document_registry WHERE status = 'pending';
+
+    -- 6. Document access log integrity
+    SELECT COUNT(*) AS access_log_entries FROM document_access_log;
+
+  expected-baseline.env: |
+    INVARIANT_PROCESSED_TOLERANCE_PCT=2
+    INVARIANT_TOTAL_TOLERANCE_PCT=2
+    INVARIANT_PENDING_THRESHOLD=100

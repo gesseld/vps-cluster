@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-state-latest
+  namespace: backup-system
+  labels:
+    app: backup-state
+    component: tracking
+    plane: data
+data:
+  phase: "Created"
+  lastRun: ""
+  lastMonthlyRun: ""
+  restoreResult: ""
+  monthlyResult: ""
+  monthlyPhase: ""
+  s3AuditStatus: "PENDING"
+  s3AuditDate: ""
+  gitopsDriftCheck: ""
+  driftFound: "0"
+  totalDocs: ""
+  processedDocs: ""
+  lastError: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-state-latest
+  namespace: dip-control-data
+  labels:
+    app: backup-state
+    component: tracking
+    plane: data
+data:
+  phase: "Created"
+  lastRun: ""
+  lastMonthlyRun: ""
+  restoreResult: ""
+  monthlyResult: ""
+  monthlyPhase: ""
+  s3AuditStatus: "PENDING"
+  s3AuditDate: ""
+  gitopsDriftCheck: ""
+  driftFound: "0"
+  totalDocs: ""
+  processedDocs: ""
+  lastError: ""
