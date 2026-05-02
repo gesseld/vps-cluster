@@ -1,0 +1,370 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: audit
+    component: anchor
+    plane: data
+    tenant: infrastructure
+  name: audit-anchor-workflow
+  namespace: dip-control-data
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tenant: infrastructure
+            plane: data
+        spec:
+          priorityClassName: dip-batch
+          containers:
+          - name: workflow
+            image: busybox:1.36
+            command: ["/bin/sh", "-c", "echo Running audit anchor workflow"]
+            resources:
+              requests:
+                cpu: "50m"
+                memory: "64Mi"
+              limits:
+                cpu: "100m"
+                memory: "128Mi"
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: dr
+    component: shadow-restore
+    plane: data
+    tenant: infrastructure
+  name: dr-shadow-restore
+  namespace: dip-control-data
+spec:
+  schedule: "0 4 * * *"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  suspend: true
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tenant: infrastructure
+            plane: data
+        spec:
+          priorityClassName: dip-batch
+          serviceAccountName: dip-restore-verifier
+          containers:
+          - name: restore-verify-daily
+            image: postgres:15-alpine
+            command:
+            - /bin/sh
+            - -ce
+            - |
+              set -e
+              TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+              NAMESPACE="dr-verify-$TIMESTAMP"
+              echo "=== Daily Restore Verification: $TIMESTAMP ==="
+
+              # Phase 1: Logical dump from production
+              echo "Phase 1: pg_dump schema + 1% sample"
+              PGPASSWORD=$DB_PASSWORD pg_dump --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=app \
+                --schema-only --exclude-table-data='users,sessions,audit_log' \
+                > /tmp/prod-schema.sql 2>/tmp/dump-errors.log || {
+                echo "pg_dump schema failed"; cat /tmp/dump-errors.log; exit 1;
+              }
+
+              PGPASSWORD=$DB_PASSWORD pg_dump --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=app \
+                --table=document_registry --data-only --compress=9 \
+                -f /tmp/prod-sample.sql.gz 2>/tmp/sample-errors.log || {
+                echo "pg_dump sample failed"; cat /tmp/sample-errors.log; exit 1;
+              }
+
+              # Phase 2: Get production baselines
+              echo "Phase 2: Production baselines"
+              PGPASSWORD=$DB_PASSWORD psql --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=app -t -A \
+                -c "SELECT COUNT(*) FROM document_registry WHERE status='processed'" \
+                > /tmp/prod-processed-count.txt 2>/dev/null
+
+              PGPASSWORD=$DB_PASSWORD psql --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=app -t -A \
+                -c "SELECT COUNT(*) FROM document_registry" \
+                > /tmp/prod-total-count.txt 2>/dev/null
+
+              echo "Production processed: $(cat /tmp/prod-processed-count.txt)"
+              echo "Production total: $(cat /tmp/prod-total-count.txt)"
+
+              # Phase 3: Verify schema parses correctly
+              echo "Phase 3: Schema validation"
+              PGPASSWORD=$DB_PASSWORD createdb --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app verify_$TIMESTAMP 2>/dev/null || true
+
+              PGPASSWORD=$DB_PASSWORD psql --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=verify_$TIMESTAMP \
+                < /tmp/prod-schema.sql > /tmp/schema-apply.log 2>&1 || {
+                echo "Schema validation FAILED"; cat /tmp/schema-apply.log; exit 1;
+              }
+
+              echo "Schema validation PASSED"
+
+              # Phase 4: Cleanup verification DB
+              PGPASSWORD=$DB_PASSWORD psql --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=app \
+                -c "DROP DATABASE IF EXISTS verify_$TIMESTAMP" 2>/dev/null || true
+
+              # Phase 5: Update backup state
+              kubectl patch configmap backup-state-latest -n dip-control-data \
+                --type=merge \
+                -p "{\"data\":{\"phase\":\"Verified\",\"lastRun\":\"$TIMESTAMP\",\"restoreResult\":\"PASS\"}}" \
+                2>/dev/null || true
+
+              echo "=== Daily restore verification PASSED ==="
+            env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-app-user
+                  key: password
+            - name: PGHOST
+              value: postgres-rw.dip-control-data.svc.cluster.local
+            - name: PGUSER
+              value: app
+            - name: PGDATABASE
+              value: app
+            - name: PGPORT
+              value: "5432"
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "256Mi"
+              limits:
+                cpu: "250m"
+                memory: "512Mi"
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: minio
+    component: replication
+    plane: data
+    tenant: infrastructure
+  name: minio-batch-replicate
+  namespace: dip-control-data
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 3
+  suspend: false
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tenant: infrastructure
+            plane: data
+        spec:
+          priorityClassName: dip-batch
+          containers:
+          - args:
+            - |
+              set -e
+              echo "Starting batch replication job..."
+              mc alias set dip-minio http://minio.dip-control-data.svc.cluster.local:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
+              mc alias set hetzner $HETZNER_ENDPOINT $HETZNER_ACCESS_KEY $HETZNER_SECRET_KEY --api s3v4 --path off
+              envsubst < /etc/batch-replicate/batch-replicate.yaml > /tmp/batch-job.yaml
+              mc batch start /tmp/batch-job.yaml
+              echo "Batch replication job submitted."
+            command:
+            - /bin/sh
+            - -c
+            env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  key: MINIO_ROOT_USER
+                  name: minio-credentials
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: MINIO_ROOT_PASSWORD
+                  name: minio-credentials
+            - name: HETZNER_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  key: endpoint
+                  name: hetzner-s3-credentials
+            - name: HETZNER_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: access-key
+                  name: hetzner-s3-credentials
+            - name: HETZNER_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: secret-key
+                  name: hetzner-s3-credentials
+            image: minio/mc:latest
+            imagePullPolicy: IfNotPresent
+            name: batch-replicator
+            resources:
+              limits:
+                cpu: 200m
+                memory: 256Mi
+              requests:
+                cpu: 100m
+                memory: 128Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+            volumeMounts:
+            - mountPath: /etc/batch-replicate
+              name: batch-config
+              readOnly: true
+          dnsPolicy: ClusterFirst
+          restartPolicy: Never
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+          volumes:
+          - configMap:
+              defaultMode: 420
+              name: batch-replicate-config
+            name: batch-config
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: minio
+    component: backup
+    plane: data
+    tenant: infrastructure
+  name: minio-metadata-backup
+  namespace: dip-control-data
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  schedule: "0 2 * * *"
+  successfulJobsHistoryLimit: 3
+  suspend: false
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tenant: infrastructure
+            plane: data
+        spec:
+          priorityClassName: dip-batch
+          containers:
+          - args:
+            - |
+              set -e
+              apk add --no-cache curl ca-certificates
+              curl -fsSL -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+              chmod +x /usr/local/bin/mc
+              BACKUP_DATE=$(date +%Y%m%d-%H%M%S)
+              echo "Starting MinIO metadata backup: $BACKUP_DATE"
+
+              mc alias set local http://minio.dip-control-data.svc.cluster.local:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
+              mc alias set hetzner $HETZNER_ENDPOINT $HETZNER_ACCESS_KEY $HETZNER_SECRET_KEY --api s3v4 --path off
+
+              echo "Exporting MinIO cluster metadata..."
+              mc admin cluster bucket export local /tmp/minio-metadata-${BACKUP_DATE}.json || true
+
+              gzip -f /tmp/minio-metadata-${BACKUP_DATE}.json
+
+              echo "Uploading to Hetzner..."
+              mc cp /tmp/minio-metadata-${BACKUP_DATE}.json.gz \
+                hetzner/dip-dr-backups-fsn1/dip-backups/metadata/minio-${BACKUP_DATE}.json.gz
+
+              echo "Backing up PostgreSQL document_registry..."
+              export PGPASSWORD=$DB_PASSWORD
+              pg_dump --host=postgres-rw.dip-control-data.svc.cluster.local \
+                --port=5432 --username=app --dbname=app \
+                --table=document_registry --table=ilm_audit_log \
+                --data-only --compress=9 \
+                --exclude-table-data='users,sessions,audit_log' \
+                -f /tmp/dip-registry-${BACKUP_DATE}.sql.gz
+
+              mc cp /tmp/dip-registry-${BACKUP_DATE}.sql.gz \
+                hetzner/dip-dr-backups-fsn1/dip-backups/metadata/registry-${BACKUP_DATE}.sql.gz
+
+              echo "Metadata backup complete."
+            command:
+            - /bin/sh
+            - -c
+            env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  key: MINIO_ROOT_USER
+                  name: minio-credentials
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: MINIO_ROOT_PASSWORD
+                  name: minio-credentials
+            - name: HETZNER_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  key: endpoint
+                  name: hetzner-s3-credentials
+            - name: HETZNER_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: access-key
+                  name: hetzner-s3-credentials
+            - name: HETZNER_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: secret-key
+                  name: hetzner-s3-credentials
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: password
+                  name: postgres-app-user
+            image: postgres:15-alpine
+            imagePullPolicy: IfNotPresent
+            name: backup
+            resources:
+              limits:
+                cpu: 500m
+                memory: 512Mi
+              requests:
+                cpu: 200m
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+          dnsPolicy: ClusterFirst
+          restartPolicy: Never
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30

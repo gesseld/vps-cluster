@@ -1,0 +1,55 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: temporal
+  namespace: dip-control-infra
+spec:
+  project: default
+  source:
+    repoURL: https://temporalio.github.io/helm-charts
+    chart: temporal
+    targetRevision: 1.1.1
+    helm:
+      values: |
+        server:
+          config:
+            persistence:
+              defaultStore: default
+              visibilityStore: visibility
+              numHistoryShards: 512
+              datastores:
+                default:
+                  sql:
+                    pluginName: postgres12
+                    databaseName: temporal
+                    connectAddr: "postgres-rw.dip-control-data.svc.cluster.local:5432"
+                    connectProtocol: tcp
+                    user: temporal
+                    password: temporal_password
+                visibility:
+                  sql:
+                    pluginName: postgres12
+                    databaseName: temporal_visibility
+                    connectAddr: "postgres-rw.dip-control-data.svc.cluster.local:5432"
+                    connectProtocol: tcp
+                    user: temporal
+                    password: temporal_password
+          frontend:
+            replicaCount: 1
+          history:
+            replicaCount: 1
+          matching:
+            replicaCount: 1
+          worker:
+            replicaCount: 1
+        web:
+          enabled: true
+        admintools:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dip-control-data
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true

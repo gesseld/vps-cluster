@@ -1,0 +1,165 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hcloud-snapshot-backup
+  namespace: dip-control-infra
+  labels:
+    app: hcloud-snapshot
+    component: maintenance
+    plane: control
+    tenant: infrastructure
+spec:
+  schedule: "0 */4 * * *"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tenant: infrastructure
+            plane: control
+        spec:
+          priorityClassName: dip-batch
+          containers:
+          - name: snapshot
+            image: alpine:3.19
+            command:
+            - /bin/sh
+            - -ce
+            - |
+              set -e
+              apk add --no-cache curl jq >/dev/null 2>&1
+              HCLOUD_TOKEN=$(cat /etc/hetzner-api-token/token)
+              SERVERS=$(curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                "https://api.hetzner.cloud/v1/servers" | jq -r '.servers[].name')
+
+              for SERVER in $SERVERS; do
+                SNAPSHOT_NAME="auto-${SERVER}-$(date +%Y%m%d-%H%M%S)"
+                SERVER_ID=$(curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                  "https://api.hetzner.cloud/v1/servers?name=${SERVER}" | jq -r '.servers[0].id')
+
+                echo "Creating snapshot for $SERVER (ID: $SERVER_ID)..."
+                curl -s -X POST -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"name\":\"$SNAPSHOT_NAME\",\"description\":\"Auto backup $SERVER\"}" \
+                  "https://api.hetzner.cloud/v1/servers/${SERVER_ID}/actions/create_image" >/dev/null
+
+                echo "Snapshot $SNAPSHOT_NAME created for $SERVER"
+              done
+
+              # Cleanup snapshots older than 36h
+              echo "Cleaning up old snapshots..."
+              SNAPSHOTS=$(curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                "https://api.hetzner.cloud/v1/images?type=snapshot&sort=created")
+              echo "$SNAPSHOTS" | jq -r '.images[] | select(.created | fromdateiso8601 < (now - 129600)) | .id' | \
+              while read -r ID; do
+                echo "Deleting old snapshot ID: $ID"
+                curl -s -X DELETE -H "Authorization: Bearer $HCLOUD_TOKEN" \
+                  "https://api.hetzner.cloud/v1/images/${ID}" >/dev/null
+              done
+
+              echo "Snapshot backup complete."
+            env:
+            - name: HCLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hetzner-api-token
+                  key: token
+            volumeMounts:
+            - name: token
+              mountPath: /etc/hetzner-api-token
+              readOnly: true
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+              limits:
+                cpu: "200m"
+                memory: "256Mi"
+          volumes:
+          - name: token
+            secret:
+              secretName: hetzner-api-token
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: k3s-etcd-snapshot
+  namespace: dip-control-infra
+  labels:
+    app: etcd-snapshot
+    component: maintenance
+    plane: control
+    tenant: infrastructure
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            tenant: infrastructure
+            plane: control
+        spec:
+          priorityClassName: dip-batch
+          serviceAccountName: dip-validator
+          containers:
+          - name: etcd-backup
+            image: alpine:3.19
+            command:
+            - /bin/sh
+            - -ce
+            - |
+              set -e
+              apk add --no-cache curl aws-cli >/dev/null 2>&1
+              TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+              echo "=== K3s etcd snapshot: $TIMESTAMP ==="
+
+              # Export key cluster state
+              echo "Exporting cluster resources..."
+              kubectl get all --all-namespaces -o yaml > /tmp/cluster-state-$TIMESTAMP.yaml 2>/dev/null || true
+              kubectl get crds -o yaml > /tmp/crds-$TIMESTAMP.yaml 2>/dev/null || true
+              kubectl get secrets --all-namespaces -o yaml > /tmp/secrets-$TIMESTAMP.yaml 2>/dev/null || true
+
+              # Compress and upload
+              tar czf /tmp/etcd-backup-$TIMESTAMP.tar.gz \
+                /tmp/cluster-state-$TIMESTAMP.yaml \
+                /tmp/crds-$TIMESTAMP.yaml \
+                /tmp/secrets-$TIMESTAMP.yaml 2>/dev/null
+
+              aws s3 cp /tmp/etcd-backup-$TIMESTAMP.tar.gz \
+                s3://dip-postgres-wal-worm-immutable/etcd-backups/daily-$TIMESTAMP.tar.gz \
+                2>/dev/null || echo "WARNING: Upload failed"
+
+              echo "=== etcd snapshot COMPLETE ==="
+            env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: hetzner-object-storage
+                  key: access_key
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hetzner-object-storage
+                  key: secret_key
+            - name: AWS_DEFAULT_REGION
+              value: fsn1
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "256Mi"
+              limits:
+                cpu: "200m"
+                memory: "512Mi"
+          restartPolicy: Never

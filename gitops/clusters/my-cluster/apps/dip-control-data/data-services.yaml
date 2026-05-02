@@ -1,0 +1,202 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: dip-control-data
+  labels:
+    app: minio
+    component: storage
+    plane: data
+spec:
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+  selector:
+    app: minio
+    component: storage
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: dip-control-data
+  labels:
+    app: minio
+    component: storage
+    plane: data
+    storage-tier: hot-cache
+spec:
+  replicas: 1
+  serviceName: minio
+  selector:
+    matchLabels:
+      app: minio
+      component: storage
+  template:
+    metadata:
+      labels:
+        app: minio
+        component: storage
+        plane: data
+        storage-tier: hot-cache
+        tenant: infrastructure
+    spec:
+      priorityClassName: dip-critical
+      containers:
+      - name: minio
+        image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+        command: ["/bin/sh", "-ce", "/usr/bin/minio server /data --console-address \":9001\" --address \":9000\""]
+        env:
+        - name: MINIO_ROOT_USER
+          valueFrom: { secretKeyRef: { name: minio-credentials, key: MINIO_ROOT_USER } }
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom: { secretKeyRef: { name: minio-credentials, key: MINIO_ROOT_PASSWORD } }
+        - name: MINIO_SITE_REGION
+          value: fsn1
+        ports:
+        - containerPort: 9000
+          name: s3
+        - containerPort: 9001
+          name: console
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: cache
+          mountPath: /cache
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: hcloud-volumes-retain
+      resources:
+        requests:
+          storage: 50Gi
+  - metadata:
+      name: cache
+      labels:
+        app: minio
+        component: cache
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: hcloud-volumes-retain
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: dip-control-data
+data:
+  nats.conf: |
+    http_port: 8222
+    port: 4222
+    jetstream {
+      max_file_store: 15Gi
+      max_memory_store: 256Mi
+      store_dir: "/data"
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: dip-control-data
+spec:
+  ports:
+  - name: nats
+    port: 4222
+  selector:
+    app.kubernetes.io/name: nats
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: dip-control-data
+spec:
+  replicas: 1
+  serviceName: nats-headless
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats
+        tenant: infrastructure
+    spec:
+      priorityClassName: dip-critical
+      containers:
+      - name: nats
+        image: nats:2.12.6-alpine
+        args: ["--config", "/etc/nats-config/nats.conf"]
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nats-config
+        - name: nats-js
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: nats-js
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: hcloud-volumes
+      resources:
+        requests:
+          storage: 15Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: dip-control-data
+spec:
+  ports:
+  - name: redis
+    port: 6379
+  selector:
+    app.kubernetes.io/name: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-node
+  namespace: dip-control-data
+spec:
+  replicas: 2
+  serviceName: redis-headless
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        tenant: infrastructure
+    spec:
+      priorityClassName: dip-critical
+      containers:
+      - name: redis
+        image: registry-1.docker.io/bitnami/redis:latest
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom: { secretKeyRef: { name: redis, key: redis-password } }
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: hcloud-volumes-retain
+      resources:
+        requests:
+          storage: 10Gi

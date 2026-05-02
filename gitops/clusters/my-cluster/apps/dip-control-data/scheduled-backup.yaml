@@ -1,0 +1,37 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: postgres-daily-backup
+  namespace: dip-control-data
+  labels:
+    app: cnpg
+    component: backup
+    plane: data
+    tenant: infrastructure
+spec:
+  schedule: "0 2 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: postgres
+  method: barmanObjectStore
+  suspend: false
+  immediate: false
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: postgres-weekly-backup
+  namespace: dip-control-data
+  labels:
+    app: cnpg
+    component: backup
+    plane: data
+    tenant: infrastructure
+spec:
+  schedule: "0 3 * * 7"
+  backupOwnerReference: self
+  cluster:
+    name: postgres
+  method: barmanObjectStore
+  suspend: false
+  immediate: false

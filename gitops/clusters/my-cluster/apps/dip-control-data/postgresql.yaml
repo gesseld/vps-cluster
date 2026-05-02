@@ -1,0 +1,54 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres
+  namespace: dip-control-data
+  labels:
+    plane: data
+    tenant: infrastructure
+spec:
+  instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:15
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: 10Gi
+    storageClass: hcloud-volumes-retain
+  bootstrap:
+    initdb:
+      database: app
+      owner: postgres
+      secret:
+        name: postgres-app-user
+  superuserSecret:
+    name: postgres-app-user
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://dip-postgres-wal-worm-immutable/postgres-backups-v2/
+      endpointURL: https://fsn1.your-objectstorage.com
+      s3Credentials:
+        accessKeyId:
+          key: access_key
+          name: hetzner-object-storage
+        secretAccessKey:
+          key: secret_key
+          name: hetzner-object-storage
+      wal:
+        compression: gzip
+      serverName: postgres-v2
+    retentionPolicy: "30d"
+  monitoring:
+    enablePodMonitor: true
+    disableDefaultQueries: false
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: node-role
+            operator: In
+            values:
+            - storage-heavy
+  inheritedMetadata:
+    labels:
+      plane: data
+      tenant: infrastructure

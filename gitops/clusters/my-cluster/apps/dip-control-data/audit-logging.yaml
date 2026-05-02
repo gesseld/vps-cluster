@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-pg-sink
+  namespace: dip-control-data
+  labels:
+    app: audit-pg-sink
+    component: pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-pg-sink
+  template:
+    metadata:
+      labels:
+        app: audit-pg-sink
+        component: pipeline
+    spec:
+      containers:
+      - name: pg-sink
+        image: python:3.11-slim
+        args:
+        - |
+          set -e
+          echo "Installing deps..."
+          export PIP_TARGET=/tmp/pip
+          pip install --no-cache-dir --target=/tmp/pip nats-py psycopg2-binary
+          export PYTHONPATH=/tmp/pip:$PYTHONPATH
+          echo "Starting pg_sink..."
+          python /scripts/pg_sink.py
+        command: ["/bin/sh", "-c"]
+        env:
+        - name: NATS_URL
+          value: nats://nats-audit.dip-control-data.svc.cluster.local:4222
+        - name: DB_HOST
+          value: postgres-rw.dip-control-data.svc.cluster.local
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: app
+        - name: DB_USER
+          value: app
+        - name: DB_PASSWORD
+          valueFrom: { secretKeyRef: { name: postgres-app-user, key: password } }
+        volumeMounts:
+        - name: script
+          mountPath: /scripts
+      volumes:
+      - name: script
+        configMap:
+          name: audit-pg-sink-script
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dip-metadata-sync
+  namespace: dip-control-data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dip-metadata-sync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dip-metadata-sync
+    spec:
+      priorityClassName: foundation-high
+      containers:
+      - name: sync
+        image: dip-metadata-sync:latest
+        env:
+        - name: DB_HOST
+          value: postgres-ro.dip-control-data.svc.cluster.local
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: app
+        - name: DB_PASSWORD
+          valueFrom: { secretKeyRef: { name: postgres-app-user, key: password } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-audit
+  namespace: dip-control-data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-audit
+  template:
+    metadata:
+      labels:
+        app: nats-audit
+    spec:
+      containers:
+      - name: nats
+        image: nats:2.10-alpine
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vector-audit
+  namespace: dip-control-data
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vector-audit
+  template:
+    metadata:
+      labels:
+        app: vector-audit
+    spec:
+      containers:
+      - name: vector
+        image: timberio/vector:0.34.1-distroless-libc
