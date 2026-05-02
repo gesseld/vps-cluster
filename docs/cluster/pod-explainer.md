@@ -131,16 +131,7 @@ DIP control-plane infrastructure — shared platform services (GitOps, auth, mon
 | 82 | `test-jwks-server-cb68df78b-vwvzh` | Running | k3s-w-1 | 10.42.3.47 | **Deployment Pod** — Mock JWKS (JSON Web Key Set) server for testing. Serves JWKS endpoints used by JWT validation tests. Validates that the auth service and JWT validator can correctly fetch and cache signing keys. |
 | 83 | `velero-78b5d874d5-qsd5v` | Running | k3s-cp-1 | 10.42.0.216 | **Deployment Pod** — Velero backup and restore tool. Manages Kubernetes resource backups and VolumeSnapshot backups to object storage (S3-compatible). Handles scheduled backups, on-demand backups, and disaster recovery restores. |
 | 84 | `vmsingle-victoria-metrics-single-server-0` | Running | k3s-cp-1 | 10.42.0.31 | **StatefulSet Pod** — VictoriaMetrics Single-Node server. The primary time-series database for metrics storage. Ingests Prometheus-format metrics, supports PromQL, and serves as the metrics backend for Grafana. Single-replica. |
-
----
-
-## Namespace: `dip-observability`
-
-DIP observability stack — metrics operator and management.
-
-| # | Pod Name | Status | Node | IP | Description |
-|---|----------|--------|------|----|-------------|
-| 85 | `vmoperator-victoria-metrics-operator-8455b44b77-825fd` | Running | k3s-w-1 | 10.42.3.53 | **Deployment Pod** — Victoria Metrics Operator. Manages Victoria Metrics stack components (`VMSingle`, `VMCluster`, `VMAlert`, `VMServiceScrape`) via CRDs. Creates and configures Victoria Metrics instances declaratively. |
+| 85 | `vmoperator-victoria-metrics-operator-8455b44b77-qjgrb` | Running | k3s-w-1 | 10.42.3.53 | **Deployment Pod** — Victoria Metrics Operator. Manages Victoria Metrics stack components (`VMSingle`, `VMCluster`, `VMAlert`, `VMServiceScrape`) via CRDs. Creates and configures Victoria Metrics instances declaratively. |
 
 ---
 
@@ -246,7 +237,7 @@ Traefik ingress controller — edge routing and reverse proxy.
 | **Running** | 93 |
 | **Completed** | 23 |
 | **Error** | 7 |
-| **Namespaces** | 11 actively used |
+| **Namespaces** | 10 actively used |
 
 ### Pods Currently in Error State (Requiring Investigation)
 
