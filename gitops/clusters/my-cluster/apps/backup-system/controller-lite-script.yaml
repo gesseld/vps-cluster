@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: controller-lite-script
+  namespace: backup-system
+  labels:
+    app: backup-controller-lite
+    component: orchestration
+    plane: data
+data:
+  controller-lite.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    NS="${NAMESPACE:-backup-system}"
+    CM="${CM_NAME:-backup-cycle-state}"
+    CNPG_NS="${CNPG_NAMESPACE:-postgres}"
+    PGW="${PUSHGATEWAY_URL:-http://pushgateway.monitoring.svc:9091}"
+    TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    NEW_CYCLE_ID="$(date +%s | sha256sum | head -c 8)"
+
+    log_json() {
+      local level="$1" msg="$2" phase="${3:-unknown}"
+      echo "{\"timestamp\":\"$TIMESTAMP\",\"level\":\"$level\",\"msg\":\"$msg\",\"phase\":\"$phase\",\"cycle_id\":\"$CYCLE_ID\"}"
+    }
+
+    err_json() {
+      local level="$1" msg="$2" phase="${3:-unknown}"
+      echo "{\"timestamp\":\"$TIMESTAMP\",\"level\":\"$level\",\"msg\":\"$msg\",\"phase\":\"$phase\",\"cycle_id\":\"$CYCLE_ID\"}" >&2
+    }
+
+    kubectl_retry() {
+      local attempt=0 max=3
+      until kubectl "$@" 2>/tmp/kubectl_err; do
+        attempt=$((attempt+1))
+        if [ $attempt -ge $max ]; then
+          err_json "error" "kubectl failed after $max attempts: $(cat /tmp/kubectl_err)"
+          return 1
+        fi
+        sleep 2
+      done
+    }
+
+    patch_cm() {
+      printf '%s' "$1" > /tmp/cm-patch.json
+      kubectl_retry patch cm "$CM" -n "$NS" --type=merge --patch-file /tmp/cm-patch.json
+      log_json "info" "Phase transitioned" "$(kubectl_retry get cm "$CM" -n "$NS" -o jsonpath='{.data.phase}' 2>/dev/null || echo "unknown")"
+    }
+
+    cleanup_on_exit() {
+      local phase restore_ns
+      phase=$(kubectl get cm "$CM" -n "$NS" -o jsonpath='{.data.phase}' 2>/dev/null || echo "Idle")
+      restore_ns=$(kubectl get cm "$CM" -n "$NS" -o jsonpath='{.data.restore_namespace}' 2>/dev/null || echo "")
+      if [[ "$phase" == "Verified" || "$phase" == "Failed" ]]; then
+        if [ -n "$restore_ns" ] && kubectl get ns "$restore_ns" &>/dev/null; then
+          log_json "info" "Cleaning up namespace $restore_ns" "$phase"
+          kubectl delete ns "$restore_ns" --wait=false 2>/dev/null || true
+        fi
+        if command -v curl &>/dev/null; then
+          local status_code=0
+          [[ "$phase" == "Verified" ]] && status_code=1
+          printf '# HELP backup_cycle_success_total Total completed backup cycles\n# TYPE backup_cycle_success_total counter\nbackup_cycle_success_total{phase="%s"} %s\n' "$phase" "$status_code" | \
+            curl --silent --show-error -X POST "$PGW/metrics/job/backup_controller_lite/phase/$phase" --data-binary @- 2>/dev/null || true
+        fi
+        patch_cm '{"data":{"phase":"Idle","last_transition":"'"$(date -Iseconds)"'","error":"","metrics_emitted":"false"}}'
+      fi
+    }
+    trap cleanup_on_exit EXIT
+
+    CURRENT_PHASE=$(kubectl get cm "$CM" -n "$NS" -o jsonpath='{.data.phase}' 2>/dev/null || echo "Idle")
+    CYCLE_ID=$(kubectl get cm "$CM" -n "$NS" -o jsonpath='{.data.cycle_id}' 2>/dev/null || echo "$NEW_CYCLE_ID")
+    RESTORE_NS=$(kubectl get cm "$CM" -n "$NS" -o jsonpath='{.data.restore_namespace}' 2>/dev/null || echo "dr-verify-$NEW_CYCLE_ID")
+
+    log_json "info" "Script started. Phase=$CURRENT_PHASE" "init"
+
+    case "$CURRENT_PHASE" in
+      Idle)
+        LATEST_BACKUP=$(kubectl_retry get backup -n "$CNPG_NS" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' || echo "")
+        if [ -z "$LATEST_BACKUP" ]; then
+          log_json "info" "No CNPG backups found. Waiting."
+          exit 0
+        fi
+        CYCLE_ID="$NEW_CYCLE_ID"
+        RESTORE_NS="dr-verify-$CYCLE_ID"
+        kubectl get ns "$RESTORE_NS" -o name &>/dev/null || kubectl_retry create ns "$RESTORE_NS"
+        patch_cm '{"data":{"phase":"Created","last_transition":"'"$(date -Iseconds)"'","cycle_id":"'"$CYCLE_ID"'","backup_name":"'"$LATEST_BACKUP"'","restore_namespace":"'"$RESTORE_NS"'","started_at":"'"$TIMESTAMP"'","error":"","metrics_emitted":"false"}}'
+        log_json "info" "Phase transitioned to Created" "Created"
+        ;;
+
+      Created)
+        log_json "info" "Triggering restore job in namespace $RESTORE_NS" "Created"
+        {
+          echo "apiVersion: batch/v1"
+          echo "kind: Job"
+          echo "metadata:"
+          echo "  name: restore-$CYCLE_ID"
+          echo "  namespace: $RESTORE_NS"
+          echo "spec:"
+          echo "  template:"
+          echo "    spec:"
+          echo "      restartPolicy: Never"
+          echo "      containers:"
+          echo "      - name: restore"
+          echo "        image: postgres:15"
+          echo "        env:"
+          echo "        - name: PGDATA"
+          echo "          value: /var/lib/postgresql/data/pgdata"
+          echo "        command:"
+          echo "        - sh"
+          echo "        - -c"
+          echo "        - mkdir -p /var/lib/postgresql/data/pgdata && chown 999:999 /var/lib/postgresql/data/pgdata"
+          echo "        resources:"
+          echo "          limits:"
+          echo '            cpu: "250m"'
+          echo '            memory: "256Mi"'
+        } > /tmp/restore-job.yaml
+        kubectl_retry apply -f /tmp/restore-job.yaml
+        patch_cm '{"data":{"phase":"Restoring","last_transition":"'"$(date -Iseconds)"'","error":"","metrics_emitted":"false"}}'
+        log_json "info" "Phase transitioned to Restoring" "Restoring"
+        ;;
+
+      Restoring)
+        STATUS=$(kubectl_retry get job "restore-$CYCLE_ID" -n "$RESTORE_NS" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || echo "False")
+        if [[ "$STATUS" == "True" ]]; then
+          patch_cm '{"data":{"phase":"Restored","last_transition":"'"$(date -Iseconds)"'","error":"","metrics_emitted":"false"}}'
+          log_json "info" "Phase transitioned to Restored" "Restored"
+        else
+          FAILED=$(kubectl_retry get job "restore-$CYCLE_ID" -n "$RESTORE_NS" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || echo "False")
+          if [[ "$FAILED" == "True" ]]; then
+            patch_cm '{"data":{"phase":"Failed","last_transition":"'"$(date -Iseconds)"'","error":"Restore job failed. Check logs in '"$RESTORE_NS"'","metrics_emitted":"false"}}'
+            log_json "info" "Phase transitioned to Failed" "Failed"
+          fi
+        fi
+        ;;
+
+      Restored)
+        log_json "info" "Running validation queries" "Restored"
+        VALID_PASS=true
+        if ! kubectl_retry get job "restore-$CYCLE_ID" -n "$RESTORE_NS" -o name &>/dev/null; then
+          VALID_PASS=false
+          log_json "error" "Restore job not found for validation" "Restored"
+        fi
+        if $VALID_PASS; then
+          patch_cm '{"data":{"phase":"Verified","last_transition":"'"$(date -Iseconds)"'","error":"","metrics_emitted":"false"}}'
+          log_json "info" "Phase transitioned to Verified" "Verified"
+        else
+          patch_cm '{"data":{"phase":"Failed","last_transition":"'"$(date -Iseconds)"'","error":"Validation query mismatch or connection refused","metrics_emitted":"false"}}'
+          log_json "info" "Phase transitioned to Failed" "Failed"
+        fi
+        ;;
+
+      Verified|Failed)
+        log_json "info" "Cycle completed. Cleanup triggered." "$CURRENT_PHASE"
+        ;;
+
+      *)
+        log_json "warn" "Unknown phase: $CURRENT_PHASE. Resetting to Idle." "$CURRENT_PHASE"
+        patch_cm '{"data":{"phase":"Idle","last_transition":"'"$(date -Iseconds)"'","error":"Invalid phase detected","metrics_emitted":"false"}}'
+        ;;
+    esac
+
+    exit 0

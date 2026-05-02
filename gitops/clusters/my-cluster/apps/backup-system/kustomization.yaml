@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: backup-system
+resources:
+- namespace.yaml
+- backup-state-configmap.yaml
+- restore-verify-cronjob.yaml
+- s3-reconcile-cronjob.yaml
+- pre-backup-integrity.yaml
+- time-sync-daemonset.yaml
+- business-invariants-configmap.yaml
+- control-plane-backup.yaml
+- rbac.yaml
+- configmap-state.yaml
+- controller-lite-script.yaml
+- cronjob.yaml

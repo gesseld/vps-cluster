@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-cycle-state
+  namespace: backup-system
+  labels:
+    app: backup-controller-lite
+    component: orchestration
+    plane: data
+data:
+  phase: "Idle"
+  cycle_id: ""
+  backup_name: ""
+  restore_namespace: ""
+  started_at: ""
+  error: ""
+  last_transition: ""
+  metrics_emitted: "false"

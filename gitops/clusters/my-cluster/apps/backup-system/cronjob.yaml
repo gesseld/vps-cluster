@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: controller-lite
+  namespace: backup-system
+  labels:
+    app: backup-controller-lite
+    component: orchestration
+    plane: data
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: backup-controller-lite
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+          containers:
+          - name: controller-lite
+            image: bitnami/kubectl:latest
+            command: ["/bin/bash", "/scripts/controller-lite.sh"]
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 150m
+                memory: 192Mi
+            env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CM_NAME
+              value: "backup-cycle-state"
+            - name: CNPG_NAMESPACE
+              value: "postgres"
+            - name: PUSHGATEWAY_URL
+              value: "http://pushgateway.monitoring.svc:9091"
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
+          volumes:
+          - name: scripts
+            configMap:
+              name: controller-lite-script
+              defaultMode: 0755
+          - name: tmp
+            emptyDir: {}
