@@ -42,10 +42,9 @@ Default Kubernetes namespace — application workloads and system utilities.
 |---|----------|--------|------|----|-------------|
 | 10 | `entrepeai-app-placeholder-6ccb566957-d56tv` | Running | k3s-w-2 | 10.42.2.10 | **Deployment Pod** — Placeholder application pod for "EntrepeAI" (likely a business-domain app). Single replica; serves as the initial deployment while the full application stack is being developed. |
 | 11 | `health-test` | Completed | k3s-w-1 | 10.42.3.112 | **Kubernetes Job** — One-shot health-check job that validates cluster health. Completed successfully 4 days ago. |
-| 12 | `nginx-deployment-85bc587484-cztrj` | Running | k3s-cp-1 | 10.42.0.242 | **Deployment Pod** — General-purpose nginx deployment. Serves as a basic HTTP server, likely for testing ingress or as a reverse-proxy for a specific workload. |
-| 13 | `prometheus-operator-5dc4476447-lg5hc` | Running | k3s-w-1 | 10.42.3.55 | **Deployment Pod** — Legacy Prometheus Operator (separate from Victoria Metrics stack). Creates/configures/manages Prometheus instances via CRDs (`ServiceMonitor`, `PodMonitor`, `PrometheusRule`, etc.). One restart (4d15h ago). |
-| 14 | `v55` | Completed | k3s-w-2 | 10.42.2.125 | **Kubernetes Job** — Likely a version-check or migration job. Completed successfully. Naming suggests it validates or applies version 5.5 compatibility. |
-| 15 | `vrl-check` | Completed | k3s-w-2 | 10.42.2.71 | **Kubernetes Job** — Vector Remap Language (VRL) validation job. Tests or validates VRL transformations used in the Vector observability pipeline. Completed 4 days ago. |
+| 12 | `prometheus-operator-5dc4476447-lg5hc` | Running | k3s-w-1 | 10.42.3.55 | **Deployment Pod** — Legacy Prometheus Operator (separate from Victoria Metrics stack). Creates/configures/manages Prometheus instances via CRDs (`ServiceMonitor`, `PodMonitor`, `PrometheusRule`, etc.). One restart (4d15h ago). |
+| 13 | `v55` | Completed | k3s-w-2 | 10.42.2.125 | **Kubernetes Job** — Likely a version-check or migration job. Completed successfully. Naming suggests it validates or applies version 5.5 compatibility. |
+| 14 | `vrl-check` | Completed | k3s-w-2 | 10.42.2.71 | **Kubernetes Job** — Vector Remap Language (VRL) validation job. Tests or validates VRL transformations used in the Vector observability pipeline. Completed 4 days ago. |
 
 ---
 
@@ -244,8 +243,8 @@ Traefik ingress controller — edge routing and reverse proxy.
 
 | Metric | Count |
 |--------|-------|
-| **Total Pods** | 125 |
-| **Running** | 95 |
+| **Total Pods** | 124 |
+| **Running** | 94 |
 | **Completed** | 23 |
 | **Error** | 7 |
 | **Namespaces** | 11 actively used |
